@@ -26,7 +26,7 @@
   ],
   "vars": {
     // Zero-Trust-Team, z. B. "https://pfleger.cloudflareaccess.com"
-    "TEAM_DOMAIN": "",
+    "TEAM_DOMAIN": "https://steep-wood-9786.cloudflareaccess.com",
     // Optional: Application Audience (AUD) Tag der Access-Anwendung
     "POLICY_AUD": ""
   },
