@@ -1,6 +1,11 @@
 /*
  * Darts Counter – Oberfläche
- * Nachbau der SwiftUI-Bildschirme. Daten liegen im Browser (localStorage).
+ * Nachbau der SwiftUI-Bildschirme.
+ *
+ * Zwei Betriebsarten (body data-mode):
+ *  - guest   (darts.pfleger.work/):     feste Spieler „Spieler 1–3“, nichts wird gespeichert, auch nicht im Browser.
+ *  - friends (darts.pfleger.work/app/): hinter Cloudflare Access; gemeinsame Daten liegen in D1 (über /api),
+ *            der Browser hält nur eine Arbeitskopie und eine Warteschlange für noch nicht gesendete Änderungen.
  */
 (function () {
   'use strict';
@@ -9,12 +14,18 @@
 
   // ================================================================ Speicher
 
-  const KEY_DATA = 'darts.data.v1', KEY_PREFS = 'darts.prefs.v1', KEY_ACTIVE = 'darts.active.v1';
-  const LS = {
+  const MODE = document.body.dataset.mode === 'friends' ? 'friends' : 'guest';
+  const GUEST = MODE === 'guest', FRIENDS = !GUEST;
+
+  const KEY_DATA = 'darts.friends.data.v1', KEY_PREFS = 'darts.friends.prefs.v1', KEY_ACTIVE = 'darts.friends.active.v1', KEY_PENDING = 'darts.friends.pending.v1';
+  // Im Gastmodus wird nichts dauerhaft abgelegt: alles lebt nur im Arbeitsspeicher dieser Seite.
+  const LS = GUEST ? { get(k, def) { return def; }, set() {}, del() {} } : {
     get(k, def) { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : def; } catch (e) { return def; } },
     set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* Speicher nicht verfügbar */ } },
     del(k) { try { localStorage.removeItem(k); } catch (e) { /* egal */ } }
   };
+  // Reste der ersten Version (Daten lagen damals ohne Anmeldung im Browser) entfernen.
+  try { ['darts.data.v1', 'darts.prefs.v1', 'darts.active.v1'].forEach((k) => localStorage.removeItem(k)); } catch (e) { /* egal */ }
   function uuid() {
     if (window.crypto && crypto.randomUUID) return crypto.randomUUID().toUpperCase();
     return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
@@ -23,9 +34,11 @@
     }).toUpperCase();
   }
 
-  const db = Object.assign({ players: [], games: [], trainings: [] }, LS.get(KEY_DATA, {}));
+  const GUEST_PLAYERS = [1, 2, 3].map((n) => ({ uuid: 'GAST-' + n, name: 'Spieler ' + n, colorIndex: n - 1, createdAt: '2000-01-01T00:00:0' + n + '.000Z' }));
+  const db = GUEST ? { players: GUEST_PLAYERS.map((p) => Object.assign({}, p)), games: [], trainings: [] }
+    : Object.assign({ players: [], games: [], trainings: [] }, LS.get(KEY_DATA, {}));
   const prefs = deepMerge({
-    game: { startScore: 501, legsToWin: 1, doubleOut: true, masterIn: false, randomOrder: false, selected: [] },
+    game: { startScore: 501, legsToWin: 1, doubleOut: true, masterIn: false, randomOrder: false, selected: GUEST ? ['GAST-1', 'GAST-2'] : [] },
     trainingPlayer: '',
     checkout: { targetCount: 10, dartsPerTarget: 3, maxScore: 120 },
     clockVariant: 'single',
@@ -38,7 +51,7 @@
     }
     return base;
   }
-  const saveDb = () => LS.set(KEY_DATA, db);
+  const saveDb = () => { if (GUEST) return; LS.set(KEY_DATA, db); Sync.track(); };
   const savePrefs = () => LS.set(KEY_PREFS, prefs);
 
   const playersSorted = () => db.players.slice().sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
@@ -47,6 +60,112 @@
   const gamesSorted = () => db.games.slice().sort((a, b) => String(b.date).localeCompare(String(a.date)));
   const trainingsSorted = () => db.trainings.slice().sort((a, b) => String(b.date).localeCompare(String(a.date)));
   const sortedResults = (g) => (g.results || []).slice().sort((a, b) => a.order - b.order);
+
+  // ================================================================ Gemeinsame Daten (nur Freunde-Bereich)
+
+  const KINDS = ['players', 'games', 'trainings'];
+  const Sync = {
+    state: 'idle',       // idle | syncing | offline | loggedOut | error
+    email: '',
+    known: {},           // "kind/uuid" -> JSON des zuletzt bekannten Stands
+    pending: LS.get(KEY_PENDING, {}), // "kind/uuid" -> Datensatz oder null (= löschen)
+    timer: null,
+    busy: false,
+    loaded: false,
+
+    snapshot() {
+      const m = {};
+      for (const k of KINDS) for (const r of db[k]) if (r && r.uuid) m[k + '/' + r.uuid] = JSON.stringify(r);
+      return m;
+    },
+    // Nach jeder lokalen Änderung: Unterschiede zum letzten Stand in die Warteschlange legen.
+    track() {
+      if (GUEST) return;
+      const now = this.snapshot();
+      for (const key in now) if (now[key] !== this.known[key]) this.pending[key] = JSON.parse(now[key]);
+      for (const key in this.known) if (!(key in now)) this.pending[key] = null;
+      this.known = now;
+      LS.set(KEY_PENDING, this.pending);
+      this.schedule(300);
+    },
+    schedule(ms) { clearTimeout(this.timer); this.timer = setTimeout(() => this.run(), ms); },
+    async request(method, path, body) {
+      const res = await fetch(path, {
+        method: method, credentials: 'same-origin', redirect: 'manual', cache: 'no-store',
+        headers: body ? { 'Content-Type': 'application/json' } : {},
+        body: body ? JSON.stringify(body) : undefined
+      });
+      // Abgelaufene Anmeldung: Cloudflare Access leitet zur Login-Seite um.
+      if (res.type === 'opaqueredirect' || res.status === 401 || res.status === 403) { const e = new Error('login'); e.login = true; throw e; }
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      return res.json();
+    },
+    async push() {
+      const keys = Object.keys(this.pending);
+      for (let i = 0; i < keys.length; i += 200) {
+        const chunk = keys.slice(i, i + 200);
+        const sent = {};
+        const ops = chunk.map((key) => {
+          const cut = key.indexOf('/');
+          sent[key] = JSON.stringify(this.pending[key]);
+          return { kind: key.slice(0, cut), uuid: key.slice(cut + 1), data: this.pending[key] };
+        });
+        await this.request('POST', '/api/sync', { ops: ops });
+        // Nur entfernen, was sich seit dem Senden nicht erneut geändert hat.
+        for (const key of chunk) if (JSON.stringify(this.pending[key]) === sent[key]) delete this.pending[key];
+        LS.set(KEY_PENDING, this.pending);
+      }
+    },
+    async pull() {
+      const data = await this.request('GET', '/api/data');
+      this.email = data.email || '';
+      for (const k of KINDS) db[k] = Array.isArray(data[k]) ? data[k] : [];
+      // Noch nicht gesendete eigene Änderungen wieder obendrauf legen.
+      for (const key in this.pending) {
+        const cut = key.indexOf('/'), k = key.slice(0, cut), id = key.slice(cut + 1);
+        db[k] = db[k].filter((r) => r.uuid !== id);
+        if (this.pending[key]) db[k].push(this.pending[key]);
+      }
+      this.known = this.snapshot();
+      LS.set(KEY_DATA, db);
+      this.loaded = true;
+    },
+    async run() {
+      if (GUEST || this.busy) return;
+      this.busy = true;
+      const before = this.state;
+      this.state = 'syncing';
+      try {
+        await this.push();
+        await this.pull();
+        this.state = 'idle';
+      } catch (e) {
+        this.state = e.login ? 'loggedOut' : (navigator.onLine === false || e instanceof TypeError ? 'offline' : 'error');
+        if (!e.login) this.schedule(20000);
+      }
+      this.busy = false;
+      if (Object.keys(this.pending).length && this.state === 'idle') this.schedule(500);
+      // Neu zeichnen, aber kein Eingabefeld oder Dialog stören.
+      const typing = document.activeElement && /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName);
+      if (!ui.dialog && !typing) render();
+      else if (before !== this.state) { const el = document.getElementById('syncState'); if (el) el.outerHTML = syncBadge(); }
+    }
+  };
+  if (FRIENDS) {
+    Sync.known = Sync.snapshot();
+    // Änderungen, die vor dem letzten Schließen noch nicht gesendet waren, sind schon in `pending`.
+    for (const key in Sync.pending) delete Sync.known[key];
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') Sync.schedule(0); });
+    window.addEventListener('online', () => Sync.schedule(0));
+    setInterval(() => { if (document.visibilityState === 'visible' && !ui.game) Sync.schedule(0); }, 60000);
+  }
+
+  function syncBadge() {
+    if (GUEST) return '';
+    const n = Object.keys(Sync.pending).length;
+    const txt = { idle: n ? 'Wird gespeichert …' : 'Gespeichert', syncing: 'Wird abgeglichen …', offline: 'Offline' + (n ? ' · ' + n + ' Änderung' + (n === 1 ? '' : 'en') + ' warten' : ''), loggedOut: 'Anmeldung abgelaufen', error: 'Server nicht erreichbar' }[Sync.state];
+    return '<span id="syncState" class="sync-state s-' + Sync.state + '">' + esc(txt) + '</span>';
+  }
 
   // ================================================================ Format
 
@@ -226,13 +345,13 @@
       body += '</div>';
     });
     if (!reorder) {
-      body += '<button class="row action" data-a="openAddPlayers">' + icon('personPlus') + 'Neuer Spieler</button>';
+      if (FRIENDS || sel.length < db.players.length) body += '<button class="row action" data-a="openAddPlayers">' + icon('personPlus') + (FRIENDS ? 'Neuer Spieler' : 'Spieler hinzufügen') + '</button>';
       if (sel.length > 1) body += toggle('randomOrder', 'Zufällige Startreihenfolge', g.randomOrder, 'randomOrder', 'shuffle');
     }
     let foot;
     if (reorder) foot = 'Verschiebe die Spieler mit den Pfeilen in die gewünschte Wurfreihenfolge.';
     else if (g.randomOrder && sel.length > 1) foot = 'Die Wurfreihenfolge wird beim Spielstart ausgelost. Zum Entfernen auf − tippen.';
-    else foot = 'Reihenfolge = Wurfreihenfolge. Zum Entfernen auf − tippen. Die Auswahl bleibt für das nächste Spiel erhalten.';
+    else foot = 'Reihenfolge = Wurfreihenfolge. Zum Entfernen auf − tippen.' + (FRIENDS ? ' Die Auswahl bleibt für das nächste Spiel erhalten.' : '');
     const headRight = sel.length > 1 ? '<button class="link-btn" data-a="toggleReorder">' + (reorder ? 'Fertig' : 'Reihenfolge ändern') + '</button>' : '';
     h += section('<span>Spieler</span>' + headRight, body, foot);
 
@@ -243,10 +362,11 @@
   function sheetAddPlayers() {
     const avail = playersSorted().filter((p) => prefs.game.selected.indexOf(p.uuid) < 0);
     let h = '<div class="sheet-head"><span class="side"></span><h2>Spieler hinzufügen</h2><span class="side"><button class="link-btn" data-a="closeSheet">Fertig</button></span></div>';
-    h += section('Neuen Spieler anlegen',
+    if (FRIENDS) h += section('Neuen Spieler anlegen',
       '<form class="row" data-f="createSelect"><input class="name-input" id="newPlayerName" placeholder="Name" autocomplete="off" enterkeyhint="done"><button class="btn small" type="submit">Anlegen</button></form>');
     let body = '';
     if (!avail.length) body += '<div class="row empty">Alle Spieler sind bereits ausgewählt.</div>';
+    if (GUEST) h += section('', '<div class="row sub" style="color:var(--fg)">Als Gast gibt es drei feste Spieler. Eigene Namen und gespeicherte Statistik gibt es im Freunde-Bereich.</div>');
     avail.forEach((p) => {
       body += '<button class="row link" data-a="selectPlayer" data-id="' + p.uuid + '">' + avatar(p.name, p.colorIndex) + '<span class="grow ellipsis">' + esc(p.name) + '</span><span class="ok" style="display:inline-flex">' + icon('plusc') + '</span></button>';
     });
@@ -256,7 +376,7 @@
 
   function createPlayer(rawName) {
     const name = String(rawName || '').trim();
-    if (!name) return null;
+    if (!name || GUEST) return null;
     const p = { uuid: uuid(), name: name, colorIndex: db.players.length, createdAt: new Date().toISOString() };
     db.players.push(p);
     saveDb();
@@ -439,7 +559,8 @@
     let h = header('Training');
     const opts = [['', 'Gast']].concat(playersSorted().map((p) => [p.uuid, p.name]));
     h += section('Wer trainiert?', selectRow('trainingPlayer', 'Spieler', t ? t.id : '', opts, 'trainingPlayer'),
-      t ? 'Das Training wird in der Statistik von ' + esc(t.name) + ' gespeichert.' : 'Als Gast wird das Training nicht in einer Spielerstatistik gespeichert.');
+      GUEST ? 'Im Gastmodus wird nichts gespeichert. Die Ergebnisse siehst du nur, bis du die Seite schließt.'
+        : t ? 'Das Training wird in der Statistik von ' + esc(t.name) + ' gespeichert.' : 'Als Gast wird das Training nicht in einer Spielerstatistik gespeichert.');
     let body = '';
     for (const m of ['checkout', 'aroundTheClock', 'bobs27']) {
       const M = D.TrainingModes[m];
@@ -558,8 +679,8 @@
 
   function viewPlayers() {
     const ps = playersSorted();
-    let h = header('Spieler', {
-      left: '<button class="icon-btn" data-a="openSync" aria-label="Abgleichen">' + icon('sync') + '<span>Abgleichen</span></button>',
+    let h = header('Spieler', GUEST ? {} : {
+      left: '<button class="icon-btn" data-a="openSync" aria-label="Importieren und exportieren">' + icon('sync') + '<span>Import/Export</span></button>',
       right: '<button class="icon-btn" data-a="newPlayerDialog" aria-label="Spieler hinzufügen">' + icon('plus') + '</button>'
     });
     if (!ps.length) {
@@ -571,7 +692,7 @@
       const sub = L.games > 0 ? L.games + ' ' + (L.games === 1 ? 'Spiel' : 'Spiele') + ' · Ø ' + Fmt.avg(L.average) : 'Noch keine Spiele';
       return '<button class="row link" data-a="openPlayer" data-id="' + p.uuid + '">' + avatar(p.name, p.colorIndex) + '<span class="grow"><span class="ellipsis" style="display:block">' + esc(p.name) + '</span><span class="sub">' + sub + '</span></span><span class="chev">' + icon('chevR') + '</span></button>';
     }).join('');
-    return h + section('', body);
+    return h + section('', body, GUEST ? 'Statistik nur für diese Sitzung. Beim Schließen der Seite wird alles verworfen.' : 'Alle angemeldeten Freunde sehen und bearbeiten dieselben Spieler.');
   }
 
   /** Ergebnisse eines Spielers, älteste zuerst: [{r, game}] */
@@ -648,6 +769,7 @@
     trainings.slice(0, LIST_LIMIT).forEach((t) => { trows += trainingRow(t, false); });
     h += section('Letzte Trainings', trows);
 
+    if (GUEST) return h;
     h += section('Profil',
       '<div class="row"><input class="name-input" id="playerName" data-c="playerName" data-id="' + p.uuid + '" value="' + esc(p.name) + '" aria-label="Name" autocomplete="off"></div>' +
       '<div class="colors">' + COLORS.map((c, i) => '<button style="--pc:' + c + '" data-a="playerColor" data-id="' + p.uuid + '" data-v="' + i + '" aria-pressed="' + (p.colorIndex % COLORS.length === i) + '" aria-label="Farbe ' + (i + 1) + '"></button>').join('') + '</div>');
@@ -799,35 +921,18 @@
   }
 
   function viewSync() {
-    let h = header('Abgleichen', { backLabel: 'Spieler' });
-    h += section('', '<div class="row" style="align-items:flex-start"><span class="mode-icon" style="width:auto">' + icon('info') + '</span><span class="grow sub" style="color:var(--fg)">Exportiere die Daten auf einem Gerät und importiere die Datei auf dem anderen. Spiele und Trainings werden nur übernommen, wenn sie dort noch fehlen. Gleichnamige Spieler werden zusammengeführt.</span></div>');
-    h += section('Dieses Gerät',
+    let h = header('Import/Export', { backLabel: 'Spieler' });
+    h += section('', '<div class="row" style="align-items:flex-start"><span class="mode-icon" style="width:auto">' + icon('info') + '</span><span class="grow sub" style="color:var(--fg)">Die Daten im Freunde-Bereich werden automatisch gespeichert und abgeglichen. Hier kannst du zusätzlich eine Sicherung exportieren oder einen Export aus der iOS-App übernehmen. Spiele und Trainings werden nur übernommen, wenn sie noch fehlen. Gleichnamige Spieler werden zusammengeführt.</span></div>');
+    h += section('Exportieren',
       '<div class="row"><label class="grow" for="deviceName">Gerätename</label><input class="name-input" style="text-align:right;flex:0 1 50%" id="deviceName" data-c="deviceName" value="' + esc(prefs.deviceName) + '" placeholder="z. B. iPad" autocomplete="off"></div>' +
       '<button class="row action" data-a="exportFile">' + icon('download') + 'Als Datei exportieren</button>' +
       '<button class="row action" data-a="exportCopy">' + icon('copy') + 'Export in die Zwischenablage kopieren</button>',
-      db.players.length + ' Spieler, ' + db.games.length + ' Spiele, ' + db.trainings.length + ' Trainings gespeichert.');
+      db.players.length + ' Spieler, ' + db.games.length + ' Spiele, ' + db.trainings.length + ' Trainings gemeinsam gespeichert.');
     h += section('Importieren',
       '<label class="row action" for="importFile" style="cursor:pointer">' + icon('upload') + 'Datei auswählen …<input type="file" id="importFile" accept="application/json,.json,text/plain" data-c="importFile" hidden></label>' +
       '<textarea class="paste" id="pasteBox" placeholder="… oder exportierten Text hier einfügen" aria-label="Exportierten Text einfügen"></textarea>' +
       '<button class="row action" data-a="importPaste">' + icon('check') + 'Eingefügten Text importieren</button>');
-    h += section('Testdaten',
-      '<button class="row action" data-a="sampleGames">' + icon('wand') + '10 Testspiele erzeugen</button>' +
-      '<button class="row action" data-a="sampleTrainings">' + icon('scope') + '10 Trainings pro Spieler erzeugen</button>',
-      'Simuliert komplette Spiele Dart für Dart mit der echten Spiellogik. Gibt es weniger als 2 Spieler, werden Anna, Ben und Clara angelegt.');
-    h += section('', '<button class="row danger" data-a="wipeAll">' + icon('trash') + 'Alle Daten auf diesem Gerät löschen</button>');
     return h;
-  }
-
-  function ensureSamplePlayers() {
-    const names = ['Anna', 'Ben', 'Clara'];
-    let ps = playersSorted();
-    let i = 0;
-    while (ps.length < 2) {
-      const p = { uuid: uuid(), name: names[ps.length], colorIndex: ps.length, createdAt: new Date(Date.now() + i++).toISOString() };
-      db.players.push(p);
-      ps = playersSorted();
-    }
-    return ps;
   }
 
   // ================================================================ Verlauf
@@ -844,10 +949,10 @@
           (g.winnerName ? '<span class="win">' + icon('trophy') + esc(g.winnerName) + '</span>' : '') + '</span></button>' +
           '<button class="del" data-a="deleteGame" data-id="' + g.uuid + '" aria-label="Spiel löschen" style="color:var(--muted)">' + icon('trash') + '</button></div>';
       }
-      h += section('', body);
+      h += section('', body, GUEST && gs.length ? 'Nur diese Sitzung. Nichts davon wird gespeichert.' : '');
     } else {
       const ts = trainingsSorted();
-      h += section('', ts.length ? ts.map((t) => trainingRow(t, true, true)).join('') : '<div class="row empty">Noch kein Training gespeichert.</div>');
+      h += section('', ts.length ? ts.map((t) => trainingRow(t, true, true)).join('') : '<div class="row empty">Noch kein Training gespeichert.</div>', GUEST && ts.length ? 'Nur diese Sitzung. Nichts davon wird gespeichert.' : '');
     }
     return h;
   }
@@ -891,6 +996,17 @@
     return '';
   }
 
+  function modeBar() {
+    if (GUEST) {
+      return '<div class="modebar guest"><span class="grow"><b>Gastmodus</b> · Es wird nichts gespeichert.</span><a class="link-btn" href="/app/">Freunde-Login</a></div>';
+    }
+    if (Sync.state === 'loggedOut') {
+      return '<div class="modebar warn"><span class="grow">Deine Anmeldung ist abgelaufen. Änderungen bleiben auf diesem Gerät, bis du dich wieder anmeldest.</span><button class="link-btn" data-a="relogin">Anmelden</button></div>';
+    }
+    return '<div class="modebar"><span class="grow ellipsis">' + (Sync.email ? esc(Sync.email) : 'Freunde-Bereich') + '</span>' + syncBadge() +
+      '<a class="link-btn" href="/cdn-cgi/access/logout">Abmelden</a></div>';
+  }
+
   function render() {
     const active = document.activeElement;
     const keepId = active && active.id && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA') ? active.id : null;
@@ -903,7 +1019,7 @@
     } else {
       h = '<div class="layout"><nav class="tabbar" aria-label="Bereiche"><div class="brand">' + icon('target') + 'Darts Counter</div>' +
         TABS.map((t) => '<button class="tab" data-a="tab" data-v="' + t[0] + '"' + (ui.tab === t[0] ? ' aria-current="page"' : '') + '>' + icon(t[2]) + '<span>' + t[1] + '</span></button>').join('') +
-        '</nav><main class="main">' + viewFor(route()) + '</main></div>';
+        '</nav><main class="main">' + modeBar() + viewFor(route()) + '</main></div>';
       if (ui.sheet === 'addPlayers') h += '<div class="sheet-wrap" data-a="closeSheetBg"><div class="sheet" role="dialog" aria-label="Spieler hinzufügen">' + sheetAddPlayers() + '</div></div>';
     }
     if (ui.dialog) h += dialogHtml(ui.dialog);
@@ -931,6 +1047,7 @@
       ui.tab = d.v; window.scrollTo(0, 0); render();
     },
     back() { pop(); },
+    relogin() { location.href = '/app/?' + Date.now(); },
     closeSheet() { ui.sheet = null; render(); },
     closeSheetBg(d, el, ev) { if (ev.target === el) { ui.sheet = null; render(); } },
     closeDialog() { ui.dialog = null; render(); },
@@ -1090,25 +1207,6 @@
       if (!text) return toast('Füge zuerst den exportierten Text ein.');
       box.value = '';
       importText(text);
-    },
-    sampleGames() {
-      const ps = ensureSamplePlayers();
-      const games = D.Sample.games(ps, 10, uuid);
-      db.games = db.games.concat(games); saveDb();
-      toast(games.length + ' Testspiele erzeugt.');
-    },
-    sampleTrainings() {
-      const ps = ensureSamplePlayers();
-      const ts = D.Sample.trainings(ps, 10, uuid);
-      db.trainings = db.trainings.concat(ts); saveDb();
-      toast(ts.length + ' Testtrainings erzeugt.');
-    },
-    wipeAll() {
-      confirmDialog('Alle Daten löschen?', 'Spieler, Spiele und Trainings auf diesem Gerät werden gelöscht. Exportiere vorher, wenn du sie behalten willst.', 'Alles löschen', () => {
-        db.players = []; db.games = []; db.trainings = [];
-        prefs.game.selected = []; prefs.trainingPlayer = '';
-        saveDb(); savePrefs(); toast('Alle Daten gelöscht.');
-      });
     }
   };
 
@@ -1197,4 +1295,5 @@
     try { startGame(active.settings, active.players, active.log || []); ui.game.scrollTo = null; } catch (e) { LS.del(KEY_ACTIVE); ui.game = null; }
   }
   render();
+  if (FRIENDS) Sync.schedule(0);
 })();

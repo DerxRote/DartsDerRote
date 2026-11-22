@@ -1,38 +1,45 @@
 # Darts Counter (Web)
 
-Web-Version der iOS-App „Darts Counter“, als installierbare Web-App (PWA).
-Reines HTML/CSS/JavaScript ohne Build-Schritt: Der Ordner wird so, wie er ist, ausgeliefert.
+Web-Version der iOS-App „Darts Counter“ als installierbare Web-App (PWA), Adresse: https://darts.pfleger.work
 
-Ziel-Adresse: https://darts.pfleger.work
+## Zwei Bereiche
 
-## Inhalt
+| Adresse | Wer | Daten |
+|---|---|---|
+| `darts.pfleger.work/` | alle, ohne Anmeldung | Feste Spieler „Spieler 1–3“. Es wird nichts gespeichert, auch nicht im Browser. |
+| `darts.pfleger.work/app/` | nur eingeladene Freunde (Cloudflare Access, Login-Code per E-Mail) | Spieler, Spiele und Trainings liegen gemeinsam in einer D1-Datenbank (Standort EU). |
 
-| Datei | Zweck |
+E-Mail-Adressen werden nicht in der Datenbank gespeichert. Die Anmeldung übernimmt Cloudflare Access.
+
+## Aufbau
+
+| Pfad | Zweck |
 |---|---|
-| `index.html` | Einstiegsseite |
-| `js/engine.js` | Spiellogik, 1:1 aus `Engine/*.swift` übertragen (X01, Finish-Rechner, Trainings, Statistik, Abgleich, Testdaten) |
-| `js/app.js` | Oberfläche (Spielen, Training, Spieler, Verlauf, Abgleichen) |
-| `css/style.css` | Gestaltung, hell und dunkel |
-| `manifest.webmanifest`, `icons/` | Installation auf dem Home-Bildschirm |
-| `sw.js` | Offline-Betrieb (Service Worker) |
-| `_headers` | Cache-Regeln für Cloudflare |
+| `public/` | Statische Seite (wird so ausgeliefert, kein Build-Schritt) |
+| `public/index.html`, `public/app/index.html` | Einstieg Gastmodus bzw. Freunde-Bereich |
+| `public/js/engine.js` | Spiellogik, 1:1 aus den Swift-Engines übertragen |
+| `public/js/app.js` | Oberfläche, Gastmodus und Abgleich mit dem Server |
+| `public/fonts/` | Schriften lokal (keine Verbindung zu Google) |
+| `public/sw.js` | Offline-Betrieb. Bei jeder Änderung `VERSION` hochzählen. |
+| `src/worker.js` | Server für `/api/*`: prüft die Access-Anmeldung, liest/schreibt D1 |
+| `wrangler.jsonc` | Cloudflare-Einstellungen: Domain, Datenbank, Access-Team |
 
-Die Daten liegen im Browser des jeweiligen Geräts (localStorage). Abgleich zwischen Geräten:
-Spieler → Abgleichen → exportieren und auf dem anderen Gerät importieren. Doppelte Einträge werden erkannt.
+API (nur angemeldet): `GET /api/data` liefert alles, `POST /api/sync` mit `{ ops: [{ kind, uuid, data|null }] }` speichert oder löscht.
+Die Tabelle legt der Worker beim ersten Aufruf selbst an.
 
-## Lokal ansehen
+## Cloudflare einrichten (einmalig)
+
+1. **D1-Datenbank**: Storage & Databases → D1 → Create, Name `darts`, Data location „Specify jurisdiction: EU“. Die Database ID in `wrangler.jsonc` eintragen.
+2. **Zero Trust**: Team-Namen festlegen (Free-Tarif). `TEAM_DOMAIN` in `wrangler.jsonc` auf `https://<team>.cloudflareaccess.com` setzen.
+3. **Worker anlegen**: Workers & Pages → Create application → GitHub → dieses Repository. Name `darts`. Build-Befehl leer, Deploy-Befehl `npx wrangler deploy`. Die Domain `darts.pfleger.work` richtet `wrangler.jsonc` beim Deploy selbst ein.
+4. **Access-Anwendung**: Zero Trust → Access → Applications → Add → Self-hosted. Domain `darts.pfleger.work` mit den Pfaden `app` und `api`. Policy „Allow“ mit den E-Mail-Adressen der Freunde. Login-Methode: One-time PIN.
+5. Optional: AUD-Tag der Anwendung als `POLICY_AUD` in `wrangler.jsonc` eintragen.
+
+## Lokal testen
 
 ```
-python3 -m http.server 8000
+npm install
+echo 'DEV_SKIP_AUTH_EMAIL=test@example.com' > .dev.vars
+npx wrangler dev
 ```
-Dann http://localhost:8000 öffnen.
-
-## Auf Cloudflare veröffentlichen
-
-1. Cloudflare Dashboard → Workers & Pages → Erstellen → Pages → Mit Git verbinden → dieses Repository wählen.
-2. Framework: keins. Build-Befehl: leer lassen. Ausgabeverzeichnis: `/` (bzw. der Ordner, in dem `index.html` liegt).
-3. Nach dem ersten Deploy: Projekt → Benutzerdefinierte Domains → `darts.pfleger.work` hinzufügen. Da die Domain bei Cloudflare liegt, wird der DNS-Eintrag automatisch angelegt.
-
-## Neue Version ausliefern
-
-In `sw.js` die Konstante `VERSION` hochzählen (z. B. `darts-v2`), damit installierte Apps die neuen Dateien laden.
+Dann http://localhost:8787 (Gast) bzw. http://localhost:8787/app/ (Freunde, ohne Anmeldung). `DEV_SKIP_AUTH_EMAIL` nur lokal verwenden, nie im Dashboard setzen.
