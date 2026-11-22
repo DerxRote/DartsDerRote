@@ -21,12 +21,12 @@
       "binding": "DB",
       "database_name": "darts",
       // Database ID aus dem Cloudflare-Dashboard (D1, Standort EU)
-      "database_id": "HIER-DATABASE-ID-EINTRAGEN"
+      "database_id": "55a2143c-1430-437c-8ca3-5735e4c98f9d"
     }
   ],
   "vars": {
     // Zero-Trust-Team, z. B. "https://pfleger.cloudflareaccess.com"
-    "TEAM_DOMAIN": "",
+    "TEAM_DOMAIN": "https://steep-wood-9786.cloudflareaccess.com",
     // Optional: Application Audience (AUD) Tag der Access-Anwendung
     "POLICY_AUD": ""
   },
