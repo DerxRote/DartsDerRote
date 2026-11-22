@@ -1,0 +1,34 @@
+{
+  // Darts Counter auf Cloudflare Workers.
+  // Statische Seite aus public/, Worker (src/worker.js) nur für /api/*.
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "darts",
+  "main": "src/worker.js",
+  "compatibility_date": "2026-10-28",
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "run_worker_first": ["/api/*"]
+  },
+  // Nur die eigene Domain, keine öffentliche *.workers.dev-Adresse.
+  "workers_dev": false,
+  "preview_urls": false,
+  "routes": [
+    { "pattern": "darts.pfleger.work", "custom_domain": true }
+  ],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "darts",
+      // Database ID aus dem Cloudflare-Dashboard (D1, Standort EU)
+      "database_id": "HIER-DATABASE-ID-EINTRAGEN"
+    }
+  ],
+  "vars": {
+    // Zero-Trust-Team, z. B. "https://pfleger.cloudflareaccess.com"
+    "TEAM_DOMAIN": "",
+    // Optional: Application Audience (AUD) Tag der Access-Anwendung
+    "POLICY_AUD": ""
+  },
+  "observability": { "enabled": true }
+}
