@@ -135,6 +135,8 @@ async function postJoin(request, env, user) {
   if (await isMember(env, user.email)) return json({ ok: true, member: true });
 
   const now = Math.floor(Date.now() / 1000);
+  // Abgelaufene Zählungen falscher Versuche entfernen (Datensparsamkeit, siehe Datenschutzerklärung).
+  await env.DB.prepare('DELETE FROM join_attempts WHERE ?1 - window_start >= ?2').bind(now, FAILURE_WINDOW).run();
   const att = await env.DB.prepare('SELECT failures, window_start FROM join_attempts WHERE email = ?1').bind(user.email).first();
   const inWindow = att && now - att.window_start < FAILURE_WINDOW;
   if (inWindow && att.failures >= MAX_FAILURES) {
