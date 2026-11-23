@@ -1280,7 +1280,8 @@
     } else {
       h = '<div class="layout"><nav class="tabbar" aria-label="Bereiche"><div class="brand">' + icon('target') + 'Darts Counter</div>' +
         TABS.map((t) => '<button class="tab" data-a="tab" data-v="' + t[0] + '"' + (ui.tab === t[0] ? ' aria-current="page"' : '') + '>' + icon(t[2]) + '<span>' + t[1] + '</span></button>').join('') +
-        '</nav><main class="main">' + modeBar() + (FRIENDS && Sync.state === 'notMember' ? viewJoin() : viewFor(route())) + '</main></div>';
+        '</nav><main class="main">' + modeBar() + (FRIENDS && Sync.state === 'notMember' ? viewJoin() : viewFor(route())) +
+        '<footer class="legal-foot"><a href="/impressum">Impressum</a> · <a href="/datenschutz">Datenschutz</a></footer></main></div>';
       if (ui.sheet === 'addPlayers') h += '<div class="sheet-wrap" data-a="closeSheetBg"><div class="sheet" role="dialog" aria-label="Spieler hinzufügen">' + sheetAddPlayers() + '</div></div>';
     }
     if (ui.dialog) h += dialogHtml(ui.dialog);

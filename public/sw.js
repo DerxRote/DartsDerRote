@@ -2,7 +2,7 @@
    Bei jeder Änderung an den Dateien VERSION hochzählen, damit Geräte die neue Version laden.
    /app/ (Freunde-Bereich) wird nicht vorab geladen, weil davor die Anmeldung von Cloudflare Access sitzt.
    /api/ und /cdn-cgi/ gehen immer direkt ans Netz. */
-const VERSION = 'darts-v7';
+const VERSION = 'darts-v8';
 const FILES = [
   '/', '/css/style.css', '/fonts/fonts.css', '/js/engine.js', '/js/app.js',
   '/manifest.webmanifest', '/manifest-app.webmanifest',
@@ -32,6 +32,8 @@ self.addEventListener('fetch', (event) => {
 
   // Seiten: erst Netz (für Updates und die Anmeldung), offline aus dem Cache
   if (req.mode === 'navigate') {
+    // Nur die beiden App-Seiten offline vorhalten; Impressum und Datenschutz kommen immer frisch aus dem Netz.
+    if (!(url.pathname === '/' || url.pathname === '/index.html' || url.pathname.startsWith('/app'))) return;
     const key = url.pathname.startsWith('/app') ? '/app/' : '/';
     event.respondWith(fetch(req).then((res) => {
       if (cacheable(res)) { const copy = res.clone(); caches.open(VERSION).then((c) => c.put(key, copy)); }
