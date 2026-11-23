@@ -46,3 +46,16 @@ printf 'DEV_SKIP_AUTH_EMAIL=test@example.com\nINVITE_CODE=test\n' > .dev.vars
 npx wrangler dev
 ```
 Dann http://localhost:8787 (Gast) bzw. http://localhost:8787/app/ (Freunde, ohne Anmeldung). `DEV_SKIP_AUTH_EMAIL` nur lokal verwenden, nie im Dashboard setzen.
+
+## Startseite pfleger.work (`landing/`)
+
+Eigener kleiner Worker `pfleger-work` im Unterordner `landing/`, gleiches Repository. Zeigt einen kurzen Text und Kacheln zu den Projekten, dazu eigenes Impressum und Datenschutz. Keine Cookies, kein JavaScript im Browser, Schriften lokal.
+
+| Pfad | Zweck |
+|---|---|
+| `landing/public/index.html` | Startseite. Neue Kachel: den markierten `<a class="tile">`-Block kopieren und anpassen, Bild nach `landing/public/icons/`. |
+| `landing/public/impressum.html`, `datenschutz.html` | Rechtstexte der Startseite |
+| `landing/src/worker.js` | Leitet `www.pfleger.work` auf `pfleger.work` um |
+| `landing/wrangler.jsonc` | Domains `pfleger.work` und `www.pfleger.work` |
+
+Einrichten (einmalig): Workers & Pages → Create application → Import a repository → dieses Repository. Name `pfleger-work`, unter „Advanced settings“ Root directory `landing`, Deploy-Befehl `npx wrangler deploy`. Die Domains richtet `wrangler.jsonc` beim Deploy selbst ein. Gibt es für `pfleger.work` oder `www` schon einen DNS-Eintrag, muss der vorher gelöscht werden.
