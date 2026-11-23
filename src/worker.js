@@ -5,8 +5,9 @@
  * Davor sitzt Cloudflare Access: Nur eingeladene E-Mail-Adressen kommen durch. Zusätzlich prüft der Worker
  * das von Access signierte Token (Header Cf-Access-Jwt-Assertion), damit niemand Access umgehen kann.
  *
- * Gespeichert werden nur Spieler, Spiele und Trainings (gemeinsam für alle Freunde). E-Mail-Adressen werden
- * nicht in der Datenbank abgelegt.
+ * Anmelden (Login-Code per E-Mail) kann sich jeder. Mitspielen darf aber nur, wer einmal den geheimen
+ * Einladungscode eingegeben hat (Worker-Secret INVITE_CODE). Freigeschaltete E-Mail-Adressen stehen in der
+ * Tabelle members. Alle anderen Daten (Spieler, Spiele, Trainings) sind gemeinsam für alle Mitglieder.
  */
 
 const KINDS = new Set(['players', 'games', 'trainings']);
@@ -74,7 +75,7 @@ async function authenticate(request, env) {
   // Nur für die lokale Entwicklung: DEV_SKIP_AUTH_EMAIL steht ausschließlich in .dev.vars (nicht im Repo,
   // nie im Dashboard setzen). wrangler dev läuft über http, die echte Seite immer über https.
   if (env.DEV_SKIP_AUTH_EMAIL && url.protocol === 'http:') {
-    return { email: env.DEV_SKIP_AUTH_EMAIL };
+    return { email: normEmail(env.DEV_SKIP_AUTH_EMAIL) };
   }
   const teamDomain = String(env.TEAM_DOMAIN || '').replace(/\/+$/, '');
   if (!/^https:\/\/[a-z0-9-]+\.cloudflareaccess\.com$/.test(teamDomain)) return null;
@@ -82,7 +83,7 @@ async function authenticate(request, env) {
   if (!token) return null;
   try {
     const payload = await verifyAccessJwt(token, teamDomain, env.POLICY_AUD || '');
-    return { email: payload.email || '' };
+    return { email: normEmail(payload.email) };
   } catch (e) {
     return null;
   }
@@ -93,10 +94,76 @@ async function authenticate(request, env) {
 let schemaReady = false;
 async function ensureSchema(db) {
   if (schemaReady) return;
-  await db.prepare(
-    'CREATE TABLE IF NOT EXISTS records (kind TEXT NOT NULL, uuid TEXT NOT NULL, data TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY (kind, uuid))'
-  ).run();
+  await db.batch([
+    db.prepare('CREATE TABLE IF NOT EXISTS records (kind TEXT NOT NULL, uuid TEXT NOT NULL, data TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY (kind, uuid))'),
+    db.prepare('CREATE TABLE IF NOT EXISTS members (email TEXT PRIMARY KEY, joined_at TEXT NOT NULL)'),
+    db.prepare('CREATE TABLE IF NOT EXISTS join_attempts (email TEXT PRIMARY KEY, failures INTEGER NOT NULL, window_start INTEGER NOT NULL)')
+  ]);
   schemaReady = true;
+}
+
+// ------------------------------------------------------------ Einladungscode
+
+const MAX_FAILURES = 5;            // falsche Versuche pro E-Mail …
+const FAILURE_WINDOW = 3600;       // … pro Stunde
+
+const normEmail = (e) => String(e || '').trim().toLowerCase();
+
+async function isMember(env, email) {
+  if (!email) return false;
+  const row = await env.DB.prepare('SELECT 1 AS ok FROM members WHERE email = ?1').bind(email).first();
+  return !!row;
+}
+
+// Vergleich in konstanter Zeit, damit die Antwortzeit nichts über den Code verrät.
+async function sameSecret(a, b) {
+  const enc = new TextEncoder();
+  const [ha, hb] = await Promise.all([crypto.subtle.digest('SHA-256', enc.encode(a)), crypto.subtle.digest('SHA-256', enc.encode(b))]);
+  const x = new Uint8Array(ha), y = new Uint8Array(hb);
+  let diff = 0;
+  for (let i = 0; i < x.length; i++) diff |= x[i] ^ y[i];
+  return diff === 0;
+}
+
+const normCode = (c) => String(c || '').trim().replace(/\s+/g, ' ').toLowerCase();
+
+async function postJoin(request, env, user) {
+  const bad = checkPost(request); if (bad) return bad;
+  const secret = normCode(env.INVITE_CODE);
+  if (!secret) return json({ error: 'no_code', message: 'Es ist noch kein Einladungscode eingerichtet.' }, 503);
+  if (!user.email) return json({ error: 'no_email' }, 400);
+  if (await isMember(env, user.email)) return json({ ok: true, member: true });
+
+  const now = Math.floor(Date.now() / 1000);
+  const att = await env.DB.prepare('SELECT failures, window_start FROM join_attempts WHERE email = ?1').bind(user.email).first();
+  const inWindow = att && now - att.window_start < FAILURE_WINDOW;
+  if (inWindow && att.failures >= MAX_FAILURES) {
+    return json({ error: 'too_many', message: 'Zu viele falsche Versuche. Bitte in einer Stunde noch einmal probieren.' }, 429);
+  }
+
+  let body;
+  try { body = await request.json(); } catch (e) { return json({ error: 'json' }, 400); }
+  const code = normCode(body && body.code);
+  if (code && code.length <= 200 && await sameSecret(code, secret)) {
+    await env.DB.batch([
+      env.DB.prepare('INSERT OR IGNORE INTO members (email, joined_at) VALUES (?1, ?2)').bind(user.email, new Date().toISOString()),
+      env.DB.prepare('DELETE FROM join_attempts WHERE email = ?1').bind(user.email)
+    ]);
+    return json({ ok: true, member: true });
+  }
+  await env.DB.prepare(
+    'INSERT INTO join_attempts (email, failures, window_start) VALUES (?1, 1, ?2) ' +
+    'ON CONFLICT (email) DO UPDATE SET failures = CASE WHEN ?2 - window_start < ?3 THEN failures + 1 ELSE 1 END, ' +
+    'window_start = CASE WHEN ?2 - window_start < ?3 THEN window_start ELSE ?2 END'
+  ).bind(user.email, now, FAILURE_WINDOW).run();
+  return json({ error: 'wrong_code', message: 'Der Code stimmt nicht.' }, 400);
+}
+
+function checkPost(request) {
+  const origin = request.headers.get('Origin');
+  if (origin && origin !== new URL(request.url).origin) return json({ error: 'origin' }, 403);
+  if (!(request.headers.get('Content-Type') || '').includes('application/json')) return json({ error: 'content-type' }, 415);
+  return null;
 }
 
 async function getData(env, user) {
@@ -110,9 +177,7 @@ async function getData(env, user) {
 }
 
 async function postSync(request, env) {
-  const origin = request.headers.get('Origin');
-  if (origin && origin !== new URL(request.url).origin) return json({ error: 'origin' }, 403);
-  if (!(request.headers.get('Content-Type') || '').includes('application/json')) return json({ error: 'content-type' }, 415);
+  const bad = checkPost(request); if (bad) return bad;
 
   let body;
   try { body = await request.json(); } catch (e) { return json({ error: 'json' }, 400); }
@@ -154,6 +219,10 @@ export default {
 
     try {
       await ensureSchema(env.DB);
+      if (url.pathname === '/api/join' && request.method === 'POST') return await postJoin(request, env, user);
+      const member = await isMember(env, user.email);
+      if (url.pathname === '/api/me' && request.method === 'GET') return json({ email: user.email, member });
+      if (!member) return json({ error: 'not_member', email: user.email }, 403);
       if (url.pathname === '/api/data' && request.method === 'GET') return await getData(env, user);
       if (url.pathname === '/api/sync' && request.method === 'POST') return await postSync(request, env);
       return json({ error: 'Nicht gefunden' }, 404);

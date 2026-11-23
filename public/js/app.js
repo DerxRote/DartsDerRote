@@ -65,7 +65,9 @@
 
   const KINDS = ['players', 'games', 'trainings'];
   const Sync = {
-    state: 'idle',       // idle | syncing | offline | loggedOut | error
+    state: 'idle',       // idle | syncing | offline | loggedOut | notMember | error
+    joinError: '',
+    joining: false,
     email: '',
     known: {},           // "kind/uuid" -> JSON des zuletzt bekannten Stands
     pending: LS.get(KEY_PENDING, {}), // "kind/uuid" -> Datensatz oder null (= löschen)
@@ -96,9 +98,13 @@
         body: body ? JSON.stringify(body) : undefined
       });
       // Abgelaufene Anmeldung: Cloudflare Access leitet zur Login-Seite um.
-      if (res.type === 'opaqueredirect' || res.status === 401 || res.status === 403) { const e = new Error('login'); e.login = true; throw e; }
-      if (!res.ok) throw new Error('HTTP ' + res.status);
-      return res.json();
+      if (res.type === 'opaqueredirect' || res.status === 401) { const e = new Error('login'); e.login = true; throw e; }
+      let data = null;
+      try { data = await res.json(); } catch (err) { /* keine JSON-Antwort */ }
+      if (res.status === 403 && data && data.error === 'not_member') { const e = new Error('member'); e.notMember = true; this.email = data.email || ''; throw e; }
+      if (res.status === 403 && !data) { const e = new Error('login'); e.login = true; throw e; }
+      if (!res.ok) { const e = new Error((data && data.message) || 'HTTP ' + res.status); e.status = res.status; e.data = data; throw e; }
+      return data;
     },
     async push() {
       const keys = Object.keys(this.pending);
@@ -140,14 +146,14 @@
         await this.pull();
         this.state = 'idle';
       } catch (e) {
-        this.state = e.login ? 'loggedOut' : (navigator.onLine === false || e instanceof TypeError ? 'offline' : 'error');
-        if (!e.login) this.schedule(20000);
+        this.state = e.login ? 'loggedOut' : e.notMember ? 'notMember' : (navigator.onLine === false || e instanceof TypeError ? 'offline' : 'error');
+        if (!e.login && !e.notMember) this.schedule(20000);
       }
       this.busy = false;
       if (Object.keys(this.pending).length && this.state === 'idle') this.schedule(500);
       // Neu zeichnen, aber kein Eingabefeld oder Dialog stören.
       const typing = document.activeElement && /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName);
-      if (!ui.dialog && !typing) render();
+      if ((!ui.dialog && !typing) || before !== this.state && (before === 'notMember' || this.state === 'notMember')) render();
       else if (before !== this.state) { const el = document.getElementById('syncState'); if (el) el.outerHTML = syncBadge(); }
     }
   };
@@ -163,7 +169,7 @@
   function syncBadge() {
     if (GUEST) return '';
     const n = Object.keys(Sync.pending).length;
-    const txt = { idle: n ? 'Wird gespeichert …' : 'Gespeichert', syncing: 'Wird abgeglichen …', offline: 'Offline' + (n ? ' · ' + n + ' Änderung' + (n === 1 ? '' : 'en') + ' warten' : ''), loggedOut: 'Anmeldung abgelaufen', error: 'Server nicht erreichbar' }[Sync.state];
+    const txt = { notMember: 'Noch nicht freigeschaltet', idle: n ? 'Wird gespeichert …' : 'Gespeichert', syncing: 'Wird abgeglichen …', offline: 'Offline' + (n ? ' · ' + n + ' Änderung' + (n === 1 ? '' : 'en') + ' warten' : ''), loggedOut: 'Anmeldung abgelaufen', error: 'Server nicht erreichbar' }[Sync.state];
     return '<span id="syncState" class="sync-state s-' + Sync.state + '">' + esc(txt) + '</span>';
   }
 
@@ -996,6 +1002,34 @@
     return '';
   }
 
+  async function joinWithCode(code) {
+    Sync.joining = true; Sync.joinError = ''; render();
+    try {
+      await Sync.request('POST', '/api/join', { code: code });
+      Sync.joining = false;
+      Sync.state = 'syncing';
+      toast('Willkommen! Du bist jetzt freigeschaltet.');
+      await Sync.run();
+    } catch (e) {
+      Sync.joining = false;
+      if (e.login) Sync.state = 'loggedOut';
+      Sync.joinError = e.login ? '' : (e.data && e.data.message) || (e instanceof TypeError ? 'Keine Verbindung. Bitte später noch einmal versuchen.' : 'Das hat nicht geklappt.');
+      render();
+    }
+  }
+
+  function viewJoin() {
+    let h = '<div class="title-row" style="margin-top:28px"><h1>Willkommen</h1></div>';
+    h += section('', '<div class="row" style="align-items:flex-start"><span class="mode-icon" style="width:auto">' + icon('info') + '</span><span class="grow sub" style="color:var(--fg)">' +
+      'Du bist angemeldet' + (Sync.email ? ' als <b>' + esc(Sync.email) + '</b>' : '') + '. Um mitzuspielen, gib einmalig den Einladungscode ein, den du von Christian bekommen hast.</span></div>');
+    h += section('Einladungscode',
+      '<form class="row" data-f="join"><input class="name-input" id="joinCode" placeholder="Code" autocomplete="off" autocapitalize="none" spellcheck="false" enterkeyhint="go"' + (Sync.joining ? ' disabled' : '') + '>' +
+      '<button class="btn small primary" type="submit"' + (Sync.joining ? ' disabled' : '') + '>' + (Sync.joining ? 'Prüfe …' : 'Freischalten') + '</button></form>',
+      Sync.joinError ? '<span style="color:var(--triple)">' + esc(Sync.joinError) + '</span>' : 'Groß- und Kleinschreibung ist egal. Danach musst du den Code nie wieder eingeben.');
+    h += '<div class="section" style="text-align:center"><a class="link-btn" href="/">Ohne Anmeldung als Gast spielen</a></div>';
+    return h;
+  }
+
   function modeBar() {
     if (GUEST) {
       return '<div class="modebar guest"><span class="grow"><b>Gastmodus</b> · Es wird nichts gespeichert.</span><a class="link-btn" href="/app/">Freunde-Login</a></div>';
@@ -1019,7 +1053,7 @@
     } else {
       h = '<div class="layout"><nav class="tabbar" aria-label="Bereiche"><div class="brand">' + icon('target') + 'Darts Counter</div>' +
         TABS.map((t) => '<button class="tab" data-a="tab" data-v="' + t[0] + '"' + (ui.tab === t[0] ? ' aria-current="page"' : '') + '>' + icon(t[2]) + '<span>' + t[1] + '</span></button>').join('') +
-        '</nav><main class="main">' + modeBar() + viewFor(route()) + '</main></div>';
+        '</nav><main class="main">' + modeBar() + (FRIENDS && Sync.state === 'notMember' ? viewJoin() : viewFor(route())) + '</main></div>';
       if (ui.sheet === 'addPlayers') h += '<div class="sheet-wrap" data-a="closeSheetBg"><div class="sheet" role="dialog" aria-label="Spieler hinzufügen">' + sheetAddPlayers() + '</div></div>';
     }
     if (ui.dialog) h += dialogHtml(ui.dialog);
@@ -1246,6 +1280,11 @@
     }
   };
   const F = {
+    join(form) {
+      const code = form.querySelector('#joinCode').value.trim();
+      if (!code) { Sync.joinError = 'Bitte den Code eingeben.'; render(); return; }
+      joinWithCode(code);
+    },
     newPlayer(form) {
       const name = form.querySelector('#dlgName').value;
       ui.dialog = null;
