@@ -513,3 +513,9 @@ button.hbox.act:not(:disabled):hover { background: color-mix(in srgb, var(--fg) 
 .hbox.on.setup { flex: 1 1 160px; }
 .hbox.act.danger:not(:disabled) { color: var(--triple); }
 @media (max-height: 640px) { .hbox { min-height: 34px; font-size: 13px; } .helper { padding: 6px; } }
+
+/* Ein- und Ausstieg auf „Neues Spiel“ */
+.row.rule { flex-direction: column; align-items: stretch; gap: 8px; }
+.rule-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+.rule-head .sub2 { text-align: right; }
+.rule-head .strong { white-space: nowrap; }

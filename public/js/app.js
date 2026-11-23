@@ -38,12 +38,15 @@
   const db = GUEST ? { players: GUEST_PLAYERS.map((p) => Object.assign({}, p)), games: [], trainings: [] }
     : Object.assign({ players: [], games: [], trainings: [] }, LS.get(KEY_DATA, {}));
   const prefs = deepMerge({
-    game: { startScore: 501, legsToWin: 1, doubleOut: true, masterIn: false, randomOrder: false, selected: GUEST ? ['GAST-1', 'GAST-2'] : [] },
+    game: { startScore: 501, legsToWin: 1, randomOrder: false, selected: GUEST ? ['GAST-1', 'GAST-2'] : [] },
     trainingPlayer: '',
     checkout: { targetCount: 10, dartsPerTarget: 3, maxScore: 120 },
     clockVariant: 'single',
     deviceName: ''
   }, LS.get(KEY_PREFS, {}));
+  // Ein- und Ausstiegsregel; alte Einstellungen (doubleOut/masterIn) werden übernommen.
+  Object.assign(prefs.game, D.rules(prefs.game));
+  delete prefs.game.doubleOut; delete prefs.game.masterIn;
   function deepMerge(base, over) {
     for (const k in over) {
       if (over[k] && typeof over[k] === 'object' && !Array.isArray(over[k]) && base[k] && typeof base[k] === 'object') deepMerge(base[k], over[k]);
@@ -322,6 +325,12 @@
   const SCORES = [101, 201, 301, 401, 501, 601, 701, 801, 901];
   const selectedPlayers = () => prefs.game.selected.map(playerById).filter(Boolean);
 
+  const IN_TEXT = { straight: 'Jeder Treffer zählt sofort.', double: 'Erst ein Doppel eröffnet das Spiel.', master: 'Erst ein Doppel oder Triple eröffnet das Spiel.' };
+  const OUT_TEXT = { straight: 'Jeder Treffer darf beenden.', double: 'Der letzte Dart muss ein Doppel sein.', master: 'Der letzte Dart muss ein Doppel oder Triple sein.' };
+  const ruleRow = (label, action, current, texts) =>
+    '<div class="row rule"><span class="rule-head"><span class="strong">' + esc(label) + '</span><span class="sub2">' + esc(texts[current]) + '</span></span>' +
+    segmented(D.MODES.map((m) => [m, D.MODE_NAMES[m]]), current, action) + '</div>';
+
   function viewNewGame() {
     const g = prefs.game;
     const sel = selectedPlayers();
@@ -331,11 +340,12 @@
 
     h += section('Spielmodus',
       selectRow('startScore', 'Startpunkte', g.startScore, SCORES.map((s) => [s, s]), 'startScore') +
-      toggle('doubleOut', 'Double Out', g.doubleOut, 'doubleOut') +
-      toggle('masterIn', 'Masters In', g.masterIn, 'masterIn') +
       '<div class="row"><span class="grow">' + (g.legsToWin === 1 ? 'First to 1 Leg' : 'First to ' + g.legsToWin + ' Legs') + '</span>' +
       '<span class="stepper"><button data-a="legs" data-v="-1" aria-label="Weniger Legs"' + (g.legsToWin <= 1 ? ' disabled' : '') + '>−</button>' +
       '<button data-a="legs" data-v="1" aria-label="Mehr Legs"' + (g.legsToWin >= 11 ? ' disabled' : '') + '>+</button></span></div>');
+
+    h += section('Ein- und Ausstieg', ruleRow('Check-In', 'inMode', g.inMode, IN_TEXT) + ruleRow('Check-Out', 'outMode', g.outMode, OUT_TEXT),
+      'Gerade: ' + esc(D.settingsTitle(g)));
 
     let body = '';
     if (!sel.length) body += '<div class="row empty">Noch keine Spieler ausgewählt.</div>';
@@ -423,7 +433,7 @@
     render();
   }
   function canOfferSetup(e) {
-    return !e.isFinished && e.settings.doubleOut && e.current.isIn && e.current.remaining >= 3 && e.current.remaining <= SETUP_THRESHOLD;
+    return !e.isFinished && e.settings.outMode !== 'straight' && e.current.isIn && e.current.remaining >= 3 && e.current.remaining <= SETUP_THRESHOLD;
   }
   function activeSetupTarget(g) { return g.engine.isFinished ? null : (g.setupTargets[g.engine.current.player.id] || null); }
   function pruneSetupTargets(g) {
@@ -448,7 +458,8 @@
     if (!e.isFinished || g.saved) return;
     const record = {
       uuid: uuid(), date: new Date().toISOString(),
-      startScore: e.settings.startScore, legsToWin: e.settings.legsToWin, doubleOut: e.settings.doubleOut, masterIn: e.settings.masterIn,
+      startScore: e.settings.startScore, legsToWin: e.settings.legsToWin, inMode: e.settings.inMode, outMode: e.settings.outMode,
+      doubleOut: e.settings.doubleOut, masterIn: e.settings.masterIn,
       winnerName: e.winnerName || '',
       results: e.matchStats().map((s, order) => ({ order: order, stats: s }))
     };
@@ -481,7 +492,7 @@
     board += '</div>';
 
     let visit = '<div class="visit"><div class="turn">' + esc(e.current.player.name) + ' ist dran</div>' + visitSlots(e.currentDarts);
-    if (!e.isFinished && !e.current.isIn) visit += '<div class="hint warn">' + icon('mastersIn') + 'Masters In: Mit einem Doppel beginnen</div>';
+    if (!e.isFinished && !e.current.isIn) visit += '<div class="hint warn">' + icon('mastersIn') + (e.settings.inMode === 'master' ? 'Master In: Mit Doppel oder Triple beginnen' : 'Double In: Mit einem Doppel beginnen') + '</div>';
     visit += '<div class="msg">' + esc(e.lastMessage || '') + '</div>';
     visit += '</div>';
 
@@ -1117,7 +1128,7 @@
       const order = selectedPlayers().map(asMatchPlayer);
       if (!order.length) return;
       if (g.randomOrder) for (let i = order.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); const t = order[i]; order[i] = order[j]; order[j] = t; }
-      startGame({ startScore: g.startScore, legsToWin: g.legsToWin, doubleOut: g.doubleOut, masterIn: g.masterIn }, order);
+      startGame({ startScore: g.startScore, legsToWin: g.legsToWin, inMode: g.inMode, outMode: g.outMode }, order);
       ui.game.scrollTo = null;
       render();
     },
@@ -1195,6 +1206,8 @@
     newPlayerDialog() { ui.dialog = { type: 'newPlayer' }; render(); },
     openPlayer(d) { push({ v: 'player', id: d.id }); },
     allGames(d) { push({ v: 'allGames', id: d.id }); },
+    inMode(d) { prefs.game.inMode = d.v; savePrefs(); render(); },
+    outMode(d) { prefs.game.outMode = d.v; savePrefs(); render(); },
     metric(d) { route().metric = d.v; render(); },
     tmode(d) { route().tmode = d.v; render(); },
     playerColor(d) { const p = playerById(d.id); if (p) { p.colorIndex = +d.v; saveDb(); render(); } },
@@ -1264,8 +1277,6 @@
   // Änderungen an Eingabefeldern
   const C = {
     startScore(el) { prefs.game.startScore = +el.value; savePrefs(); },
-    doubleOut(el) { prefs.game.doubleOut = el.checked; savePrefs(); },
-    masterIn(el) { prefs.game.masterIn = el.checked; savePrefs(); },
     randomOrder(el) { prefs.game.randomOrder = el.checked; savePrefs(); render(); },
     trainingPlayer(el) { prefs.trainingPlayer = el.value; savePrefs(); render(); },
     targetCount(el) { prefs.checkout.targetCount = +el.value; savePrefs(); },
