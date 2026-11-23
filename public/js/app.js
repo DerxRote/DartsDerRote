@@ -481,23 +481,32 @@
     board += '</div>';
 
     let visit = '<div class="visit"><div class="turn">' + esc(e.current.player.name) + ' ist dran</div>' + visitSlots(e.currentDarts);
-    if (!e.isFinished && !e.current.isIn) {
-      visit += '<div class="hint warn">' + icon('mastersIn') + 'Masters In: Mit einem Doppel beginnen</div>';
-    } else if (setupMode) {
+    if (!e.isFinished && !e.current.isIn) visit += '<div class="hint warn">' + icon('mastersIn') + 'Masters In: Mit einem Doppel beginnen</div>';
+    visit += '<div class="msg">' + esc(e.lastMessage || '') + '</div>';
+    visit += '</div>';
+
+    // Hilfe-Kasten zwischen Wurfanzeige und Tastenfeld: Finish-Weg und „Was möchtest du dir stellen?“.
+    // Die Knöpfe sind immer da und ausgegraut, solange sie nicht passen – so springt das Tastenfeld nicht.
+    let helper = '<div class="helper">';
+    if (setupMode && e.current.isIn && !e.isFinished) {
       if (target) {
         const path = D.Checkout.setupPath(e.current.remaining, D.score(target), e.dartsLeftInVisit);
-        visit += path
-          ? '<div class="setup-line">' + icon('scope') + 'Auf ' + D.label(target) + ' stellen: ' + path.map(D.label).join(' · ') + '</div>'
-          : '<div class="setup-line" style="color:var(--muted)">' + icon('scope') + D.label(target) + ' ist in dieser Aufnahme nicht erreichbar</div>';
-        visit += '<div class="btn-row"><button class="btn small" data-a="pickSetup">Ändern</button><button class="btn small danger" data-a="endSetup">Beenden</button></div>';
+        helper += path
+          ? '<div class="hbox on setup">' + icon('scope') + '<span>Auf <b>' + D.label(target) + '</b> stellen: ' + path.map(D.label).join(' · ') + '</span></div>'
+          : '<div class="hbox off">' + icon('scope') + '<span>' + D.label(target) + ' ist in dieser Aufnahme nicht erreichbar</span></div>';
+        helper += '<button class="hbox act small" data-a="pickSetup">Ändern</button><button class="hbox act small danger" data-a="endSetup">Beenden</button>';
       } else {
-        visit += '<div class="setup-line">Welches Doppel möchtest du dir stellen?</div>';
+        helper += '<div class="hbox on setup">' + icon('scope') + '<span>Welches Doppel möchtest du dir stellen?</span></div>';
       }
     } else {
-      visit += checkoutHint(e.checkoutSuggestion);
-      if (canOfferSetup(e)) visit += '<button class="btn small" data-a="pickSetup">' + icon('scope') + 'Was möchtest du dir stellen?</button>';
+      const sug = !e.isFinished && e.current.isIn ? e.checkoutSuggestion : null;
+      helper += sug
+        ? '<div class="hbox on">' + icon('flag') + '<span>Finish: <b>' + sug.map(D.label).join(' · ') + '</b></span></div>'
+        : '<div class="hbox off">' + icon('flag') + '<span>Finish-Weg (ab 170)</span></div>';
+      helper += '<button class="hbox act" data-a="pickSetup"' + (canOfferSetup(e) ? '' : ' disabled') + '>' + icon('scope') + '<span>Was möchtest du dir stellen?</span></button>';
     }
-    visit += '<div class="msg">' + esc(e.lastMessage || '') + '</div></div>';
+    helper += '</div>';
+    visit += helper;
 
     let pad;
     if (g.picking) {

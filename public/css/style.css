@@ -304,8 +304,8 @@ select.plain {
 .stage-head .side.r { justify-content: flex-end; }
 .stage-body { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 10px; }
 .stage-col { display: flex; flex-direction: column; gap: 10px; min-height: 0; min-width: 0; }
-.stage-col.info { flex: 1; }
-.stage-col.pad { margin-top: auto; }
+.stage-col.info { flex: none; }
+.stage-col.pad { margin-top: 0; }
 /* Sehr flache Bildschirme (Handy quer): nichts überlappen lassen, notfalls scrollen. */
 @media (max-height: 520px) {
   .stage { overflow-y: auto; }
@@ -490,3 +490,26 @@ textarea.paste {
 .sync-state { white-space: nowrap; font-size: 12px; }
 .sync-state.s-offline, .sync-state.s-error { color: var(--warn); }
 .sync-state.s-idle { color: var(--accent); }
+
+/* ---------- Hilfe-Kasten zwischen Wurfanzeige und Tastenfeld */
+.helper {
+  width: 100%; max-width: 760px; margin: 0 auto; box-sizing: border-box; display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; align-items: stretch;
+  padding: 8px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-sm);
+}
+.hbox {
+  flex: 1 1 200px; min-height: 40px; display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  padding: 6px 12px; border-radius: 10px; border: 0; font: inherit; font-size: 14px; font-weight: 600; text-align: center;
+  background: var(--surface-2); color: var(--fg);
+}
+.hbox .i { flex: none; width: 18px; height: 18px; }
+.hbox.on { color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, var(--surface)); }
+.hbox.on.setup { color: var(--fg); }
+.hbox.off, .hbox:disabled { color: color-mix(in srgb, var(--muted) 60%, var(--surface)); background: color-mix(in srgb, var(--surface-2) 55%, var(--surface)); }
+button.hbox { cursor: pointer; }
+button.hbox:disabled { cursor: default; }
+button.hbox.act:not(:disabled) { color: var(--fg); }
+button.hbox.act:not(:disabled):hover { background: color-mix(in srgb, var(--fg) 10%, var(--surface-2)); }
+.hbox.small { flex: 0 0 auto; padding: 6px 16px; }
+.hbox.on.setup { flex: 1 1 160px; }
+.hbox.act.danger:not(:disabled) { color: var(--triple); }
+@media (max-height: 640px) { .hbox { min-height: 34px; font-size: 13px; } .helper { padding: 6px; } }
