@@ -566,3 +566,10 @@ button.hbox.act:not(:disabled):hover { background: color-mix(in srgb, var(--fg) 
 .legal-links, .legal-date { color: var(--muted); font-size: 14px; margin-top: 28px !important; }
 .legal-foot { text-align: center; font-size: 13px; color: var(--muted); padding: 24px 16px 12px; }
 .legal-foot a { color: var(--muted); }
+
+/* Rund um die Uhr: drei Pfeile pro Aufnahme */
+.arrows { display: inline-flex; gap: 6px; align-items: center; }
+.arrows .arrow { color: color-mix(in srgb, var(--gray) 40%, transparent); display: inline-flex; }
+.arrows .arrow .i { width: 26px; height: 26px; }
+.arrows .arrow.hit { color: var(--double); }
+.arrows .arrow.miss { color: var(--triple); }
