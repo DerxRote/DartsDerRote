@@ -2,7 +2,7 @@
    Bei jeder Änderung an den Dateien VERSION hochzählen, damit Geräte die neue Version laden.
    /app/ (Freunde-Bereich) wird nicht vorab geladen, weil davor die Anmeldung von Cloudflare Access sitzt.
    /api/ und /cdn-cgi/ gehen immer direkt ans Netz. */
-const VERSION = 'darts-v5';
+const VERSION = 'darts-v6';
 const FILES = [
   '/', '/css/style.css', '/fonts/fonts.css', '/js/engine.js', '/js/app.js',
   '/manifest.webmanifest', '/manifest-app.webmanifest',

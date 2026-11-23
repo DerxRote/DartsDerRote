@@ -14,6 +14,26 @@
   const MISS = dart(0, SINGLE);
   const score = (d) => d.s * d.m;
   const isDouble = (d) => d.m === DOUBLE && d.s > 0;
+  const isTriple = (d) => d.m === TRIPLE && d.s > 0;
+
+  // ---------------------------------------------------------------- Ein-/Ausstiegsregeln
+  // straight: jeder Dart zählt · double: nur Doppel (inkl. Bull) · master: Doppel oder Triple
+  const MODES = ['straight', 'double', 'master'];
+  const MODE_NAMES = { straight: 'Straight', double: 'Double', master: 'Master' };
+  /** Erlaubt dieser Dart das Eröffnen bzw. Beenden unter der Regel? */
+  function qualifies(d, mode) {
+    if (d.s === 0) return false;
+    if (mode === 'double') return isDouble(d);
+    if (mode === 'master') return isDouble(d) || isTriple(d);
+    return true;
+  }
+  /** Regeln aus Einstellungen lesen; ältere Spiele kennen nur doubleOut/masterIn (masterIn hieß dort: mit Doppel beginnen). */
+  function rules(st) {
+    st = st || {};
+    const inMode = MODES.indexOf(st.inMode) >= 0 ? st.inMode : (st.masterIn ? 'double' : 'straight');
+    const outMode = MODES.indexOf(st.outMode) >= 0 ? st.outMode : (st.doubleOut === false ? 'straight' : 'double');
+    return { inMode: inMode, outMode: outMode };
+  }
   function label(d) {
     if (d.s === 0) return 'Miss';
     if (d.s === 25) return d.m === DOUBLE ? 'Bull' : '25';
@@ -43,55 +63,59 @@
 
     const cache = new Map();
     const setupCache = new Map();
+    const normOut = (m) => (m === 'straight' || m === 'master') ? m : 'double';
 
-    function isOneDartFinish(remaining, doubleOut) {
+    // Mögliche letzte Darts je Regel, beste zuerst.
+    const finishers = { double: [], master: [], straight: [] };
+    for (const s of preferredDoubles) finishers.double.push(dart(s, DOUBLE));
+    finishers.master = finishers.double.concat([20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1].map((s) => dart(s, TRIPLE)));
+    for (let s = 20; s >= 1; s--) finishers.straight.push(dart(s, SINGLE));
+    finishers.straight.push(dart(25, SINGLE));
+    finishers.straight = finishers.straight.concat(finishers.master);
+    const minRest = { double: 2, master: 2, straight: 1 };
+
+    /** Ist remaining mit einem Dart zu beenden? (zweites Argument: Ausstiegsregel oder alt true/false für Double Out) */
+    function isOneDartFinish(remaining, outMode) {
       if (remaining <= 0) return false;
-      if (doubleOut) return remaining === 50 || (remaining <= 40 && remaining % 2 === 0);
-      if (remaining <= 20 || remaining === 25 || remaining === 50) return true;
-      if (remaining <= 40 && remaining % 2 === 0) return true;
-      if (remaining <= 60 && remaining % 3 === 0) return true;
-      return false;
+      const mode = outMode === true ? 'double' : outMode === false ? 'straight' : normOut(outMode);
+      return finishers[mode].some((d) => score(d) === remaining);
     }
 
-    function finishingDouble(remaining) {
-      if (remaining === 50) return dart(25, DOUBLE);
-      if (remaining >= 2 && remaining <= 40 && remaining % 2 === 0) return dart(remaining / 2, DOUBLE);
+    function finisher(remaining, mode) {
+      const list = finishers[mode];
+      for (let i = 0; i < list.length; i++) if (score(list[i]) === remaining) return { d: list[i], rank: i };
       return null;
     }
 
-    function doubleRank(d) {
-      const i = preferredDoubles.indexOf(d.s);
-      return i < 0 ? 99 : i;
-    }
-
-    function search(remaining, darts) {
+    function search(remaining, darts, mode) {
       if (darts === 1) {
-        const f = finishingDouble(remaining);
-        return f ? [f] : null;
+        const f = finisher(remaining, mode);
+        return f ? { path: [f.d], rank: f.rank } : null;
       }
       let best = null, bestRank = Infinity;
       for (let index = 0; index < setupDarts.length; index++) {
         const first = setupDarts[index];
         const rest = remaining - score(first);
-        if (rest < 2) continue;
-        const tail = search(rest, darts - 1);
+        if (rest < minRest[mode]) continue;
+        const tail = search(rest, darts - 1, mode);
         if (!tail) continue;
-        const rank = doubleRank(tail[tail.length - 1]) * 1000 + index;
-        if (rank < bestRank) { bestRank = rank; best = [first].concat(tail); }
+        const rank = tail.rank * 1000 + index;
+        if (rank < bestRank) { bestRank = rank; best = { path: [first].concat(tail.path), rank: tail.rank }; }
       }
       return best;
     }
 
-    /** Finish-Vorschlag mit möglichst wenigen Darts, oder null. */
-    function suggestion(remaining, dartsLeft) {
+    /** Finish-Vorschlag mit möglichst wenigen Darts, oder null. outMode: 'double' (Standard), 'master', 'straight'. */
+    function suggestion(remaining, dartsLeft, outMode) {
       if (dartsLeft === undefined) dartsLeft = 3;
-      if (remaining < 2 || remaining > 170 || dartsLeft < 1) return null;
-      const key = remaining * 10 + Math.min(dartsLeft, 3);
+      const mode = normOut(outMode);
+      if (remaining < minRest[mode] || remaining > 180 || dartsLeft < 1) return null;
+      const key = mode + ':' + (remaining * 10 + Math.min(dartsLeft, 3));
       if (cache.has(key)) { const c = cache.get(key); return c.length ? c : null; }
       let result = null;
       for (let count = 1; count <= Math.min(3, dartsLeft); count++) {
-        const found = search(remaining, count);
-        if (found) { result = found; break; }
+        const found = search(remaining, count, mode);
+        if (found) { result = found.path; break; }
       }
       cache.set(key, result || []);
       return result;
@@ -144,9 +168,10 @@
   // ---------------------------------------------------------------- X01
 
   function settingsTitle(st) {
+    const r = rules(st);
     let t = String(st.startScore);
-    if (st.masterIn) t += ' · Masters In';
-    t += ' · ' + (st.doubleOut ? 'Double Out' : 'Single Out');
+    if (r.inMode !== 'straight') t += ' · ' + MODE_NAMES[r.inMode] + ' In';
+    t += ' · ' + MODE_NAMES[r.outMode] + ' Out';
     if (st.legsToWin > 1) t += ' · First to ' + st.legsToWin;
     return t;
   }
@@ -161,7 +186,13 @@
   class X01Engine {
     /** settings: {startScore, legsToWin, doubleOut, masterIn}; players: [{id, name, colorIndex}] */
     constructor(settings, players) {
-      this.settings = Object.assign({ startScore: 501, legsToWin: 1, doubleOut: true, masterIn: false }, settings);
+      this.settings = Object.assign({ startScore: 501, legsToWin: 1 }, settings);
+      const r = rules(this.settings);
+      this.settings.inMode = r.inMode;
+      this.settings.outMode = r.outMode;
+      // Für ältere Auswertungen weiterhin mitführen
+      this.settings.doubleOut = r.outMode !== 'straight';
+      this.settings.masterIn = r.inMode !== 'straight';
       this.players = players;
       this.log = [];
       this._reset();
@@ -173,8 +204,8 @@
     get winnerName() { return this.winnerIndex === null ? null : this.states[this.winnerIndex].player.name; }
 
     get checkoutSuggestion() {
-      if (this.isFinished || !this.settings.doubleOut || !this.current.isIn) return null;
-      return Checkout.suggestion(this.current.remaining, this.dartsLeftInVisit);
+      if (this.isFinished || !this.current.isIn) return null;
+      return Checkout.suggestion(this.current.remaining, this.dartsLeftInVisit, this.settings.outMode);
     }
 
     throwDart(d) {
@@ -192,12 +223,12 @@
     }
 
     matchStats() {
-      return this.states.map((st, i) => playerMatchStats(st, i === this.winnerIndex, this.settings.doubleOut));
+      return this.states.map((st, i) => playerMatchStats(st, i === this.winnerIndex, this.settings.outMode));
     }
 
     _reset() {
       const s = this.settings;
-      this.states = this.players.map((p) => ({ player: p, remaining: s.startScore, isIn: !s.masterIn, legsWon: 0, visits: [] }));
+      this.states = this.players.map((p) => ({ player: p, remaining: s.startScore, isIn: s.inMode === 'straight', legsWon: 0, visits: [] }));
       this.currentIndex = 0;
       this.currentDarts = [];
       this.legIndex = 0;
@@ -205,7 +236,7 @@
       this.winnerIndex = null;
       this.lastMessage = null;
       this.visitStart = s.startScore;
-      this.visitStartIsIn = !s.masterIn;
+      this.visitStartIsIn = s.inMode === 'straight';
       this.dartsBeforeIn = 0;
     }
 
@@ -213,9 +244,9 @@
       this.currentDarts.push(d);
       const st = this.states[this.currentIndex];
 
-      // Masters In: Bis zum ersten Doppel zählt kein Dart.
+      // Double/Master In: Bis zum ersten passenden Dart zählt nichts.
       if (!st.isIn) {
-        if (isDouble(d)) {
+        if (qualifies(d, this.settings.inMode)) {
           st.isIn = true;
         } else {
           this.dartsBeforeIn += 1;
@@ -225,9 +256,10 @@
       }
 
       const newRemaining = st.remaining - score(d);
-      const bust = this.settings.doubleOut
-        ? (newRemaining < 0 || newRemaining === 1 || (newRemaining === 0 && !isDouble(d)))
-        : newRemaining < 0;
+      const out = this.settings.outMode;
+      const bust = out === 'straight'
+        ? newRemaining < 0
+        : (newRemaining < 0 || newRemaining === 1 || (newRemaining === 0 && !qualifies(d, out)));
 
       if (bust) { this._endVisit(true, false); return; }
       st.remaining = newRemaining;
@@ -255,7 +287,7 @@
         st.isIn = this.visitStartIsIn;
         this.lastMessage = 'Bust! ' + name + ' bleibt auf ' + this.visitStart;
       } else if (!st.isIn) {
-        this.lastMessage = name + ': kein Doppel – noch nicht eröffnet';
+        this.lastMessage = name + ': ' + (this.settings.inMode === 'master' ? 'kein Doppel oder Triple' : 'kein Doppel') + ' – noch nicht eröffnet';
       } else if (!checkout) {
         this.lastMessage = name + ': ' + visitScored(visit);
       }
@@ -269,7 +301,7 @@
         }
         this.lastMessage = name + ' gewinnt Leg ' + (this.legIndex + 1) + ' (' + visitScored(visit) + ' Finish)';
         this.legIndex += 1;
-        for (const s of this.states) { s.remaining = this.settings.startScore; s.isIn = !this.settings.masterIn; }
+        for (const s of this.states) { s.remaining = this.settings.startScore; s.isIn = this.settings.inMode === 'straight'; }
         this.legStarter = (this.legStarter + 1) % this.states.length;
         this.currentIndex = this.legStarter;
       } else {
@@ -291,7 +323,7 @@
     };
   }
 
-  function playerMatchStats(state, won, doubleOut) {
+  function playerMatchStats(state, won, outMode) {
     const s = emptyStats(state.player.id, state.player.name, state.player.colorIndex);
     s.won = won;
     s.legsWon = state.legsWon;
@@ -313,7 +345,7 @@
 
       let remaining = visit.startRemaining;
       for (const d of countingDarts(visit)) {
-        if (Checkout.isOneDartFinish(remaining, doubleOut)) s.checkoutAttempts++;
+        if (Checkout.isOneDartFinish(remaining, outMode)) s.checkoutAttempts++;
         remaining -= score(d);
       }
 
@@ -560,7 +592,7 @@
       if (knownGames.has(g.uuid)) continue;
       const game = {
         uuid: g.uuid, date: g.date, startScore: g.startScore, legsToWin: g.legsToWin,
-        doubleOut: g.doubleOut, masterIn: !!g.masterIn, winnerName: g.winnerName || '',
+        doubleOut: g.doubleOut, masterIn: !!g.masterIn, inMode: g.inMode, outMode: g.outMode, winnerName: g.winnerName || '',
         results: (g.results || []).map((r) => {
           const stats = Object.assign({}, r.stats);
           const p = map[stats.id];
@@ -665,7 +697,7 @@
       if (!st.isIn) return dart(20, DOUBLE);
       const sug = e.checkoutSuggestion;
       if (sug) return sug[0];
-      if (!e.settings.doubleOut) {
+      if (e.settings.outMode === 'straight') {
         if (rem <= 20) return dart(rem, SINGLE);
         if (rem <= 60 && rem % 3 === 0) return dart(rem / 3, TRIPLE);
         if (rem < 60) return dart(20, SINGLE);
@@ -698,7 +730,7 @@
         if (!e.isFinished) continue;
         out.push({
           uuid: uuid(), date: sampleDate(gi, count), startScore: settings.startScore, legsToWin: settings.legsToWin,
-          doubleOut: settings.doubleOut, masterIn: settings.masterIn, winnerName: e.winnerName || '',
+          doubleOut: e.settings.doubleOut, masterIn: e.settings.masterIn, inMode: e.settings.inMode, outMode: e.settings.outMode, winnerName: e.winnerName || '',
           results: e.matchStats().map((s, order) => ({ order: order, stats: s }))
         });
       }
@@ -761,7 +793,7 @@
   })();
 
   global.Darts = {
-    SINGLE, DOUBLE, TRIPLE, MISS, dart, score, isDouble, label, sum,
+    SINGLE, DOUBLE, TRIPLE, MISS, dart, score, isDouble, isTriple, label, sum, MODES, MODE_NAMES, rules, qualifies,
     Checkout, settingsTitle, X01Engine, stateAverage, visitScored,
     emptyStats, statsAverage, statsFirst9, lifetimeStats,
     CheckoutTrainingEngine, AroundTheClockEngine, BobsEngine, ClockVariants, clockLabel,
