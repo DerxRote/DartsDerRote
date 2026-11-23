@@ -519,3 +519,34 @@ button.hbox.act:not(:disabled):hover { background: color-mix(in srgb, var(--fg) 
 .rule-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
 .rule-head .sub2 { text-align: right; }
 .rule-head .strong { white-space: nowrap; }
+
+/* Spielart-Auswahl: Segmente in einer Zeile */
+.row .segmented { flex: 0 0 auto; min-width: 120px; }
+
+/* Cricket */
+.keypad .grid.c3 { grid-template-columns: repeat(3, 1fr); }
+.cricket { display: flex; flex-direction: column; border-radius: 14px; overflow: hidden; background: var(--surface); border: 1px solid var(--line); }
+.crow { display: grid; grid-template-columns: 54px repeat(var(--n), minmax(0, 1fr)); align-items: stretch; border-top: 1px solid var(--line); }
+.crow.head { border-top: 0; }
+.crow > span { display: flex; align-items: center; justify-content: center; min-height: 34px; }
+.crow .cn { font-family: var(--font-display); font-weight: 700; font-size: 20px; }
+.crow.dead .cn { color: var(--muted); text-decoration: line-through; }
+.crow .cp { flex-direction: column; padding: 6px 4px; gap: 0; min-width: 0; font-size: 13px; font-weight: 650; }
+.crow .cp b { font-family: var(--font-display); font-size: 28px; line-height: 1.05; font-variant-numeric: tabular-nums; }
+.crow .cp span { max-width: 100%; }
+.crow .active { background: color-mix(in srgb, var(--pc) 16%, transparent); }
+.crow.head .cp.active { box-shadow: inset 0 -3px 0 var(--pc); }
+.mk { width: 24px; height: 24px; fill: none; stroke: var(--pc); stroke-width: 2.6; stroke-linecap: round; }
+@media (max-height: 700px) { .crow > span { min-height: 28px; } .mk { width: 20px; height: 20px; } .crow .cp b { font-size: 22px; } }
+
+/* Killer */
+.killers { display: flex; flex-direction: column; gap: 6px; }
+.kcard { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 12px; border: 2px solid transparent; background: color-mix(in srgb, var(--gray) 9%, transparent); font-weight: 650; min-width: 0; }
+.kcard.active { border-color: var(--pc); background: color-mix(in srgb, var(--pc) 16%, transparent); }
+.kcard.out { opacity: 0.45; }
+.kcard.out .grow { text-decoration: line-through; }
+.kcard .knum { font-family: var(--font-display); font-size: 22px; font-weight: 700; min-width: 42px; text-align: right; }
+.kbadge { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; padding: 2px 7px; border-radius: 99px; background: var(--triple); color: #fff; }
+.hearts { display: inline-flex; gap: 1px; color: var(--triple); }
+.hearts .i { width: 16px; height: 16px; }
+.hearts .lost { color: color-mix(in srgb, var(--gray) 35%, transparent); }

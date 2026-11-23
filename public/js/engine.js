@@ -554,12 +554,20 @@
     bobs27: {
       title: "Bob's 27", short: "Bob's 27", chartTitle: 'Punkte',
       info: 'Du startest mit 27 Punkten und wirfst je 3 Darts auf D1 bis D20 und Bull. Jeder Treffer bringt den Wert des Doubles, keine Treffer ziehen ihn ab. Bei 0 oder weniger ist Schluss.'
+    },
+    halveIt: {
+      title: 'Halve It', short: 'Halve It', chartTitle: 'Punkte',
+      info: 'Du startest mit 40 Punkten und wirfst je 3 Darts auf feste Ziele: 15, 16, ein Doppel, 17, 18, ein Triple, 19, 20, Bull. Treffer bringen Punkte. Triffst du das Ziel in einer Runde gar nicht, werden deine Punkte halbiert.'
+    },
+    jdc: {
+      title: 'JDC Challenge', short: 'JDC', chartTitle: 'Punkte',
+      info: 'Der Test der Junior Darts Corporation in 3 Teilen: Shanghai 10 bis 15, dann je ein Dart auf D1 bis D20 und Bull, dann Shanghai 15 bis 20. Single, Double und Triple derselben Zahl in einer Aufnahme geben 100 Bonuspunkte.'
     }
   };
 
   function trainingResultText(r) {
     if (r.mode === 'aroundTheClock') return r.dartsThrown + ' Darts';
-    if (r.mode === 'bobs27') return r.score + ' Punkte';
+    if (r.mode === 'bobs27' || r.mode === 'halveIt' || r.mode === 'jdc') return r.score + ' Punkte';
     return r.hits + ' von ' + r.attempts + ' gecheckt';
   }
 
@@ -592,7 +600,7 @@
       if (knownGames.has(g.uuid)) continue;
       const game = {
         uuid: g.uuid, date: g.date, startScore: g.startScore, legsToWin: g.legsToWin,
-        doubleOut: g.doubleOut, masterIn: !!g.masterIn, inMode: g.inMode, outMode: g.outMode, winnerName: g.winnerName || '',
+        doubleOut: g.doubleOut, masterIn: !!g.masterIn, inMode: g.inMode, outMode: g.outMode, variant: g.variant, lives: g.lives, winnerName: g.winnerName || '',
         results: (g.results || []).map((r) => {
           const stats = Object.assign({}, r.stats);
           const p = map[stats.id];
@@ -792,12 +800,260 @@
     return { games, trainings };
   })();
 
+  // ---------------------------------------------------------------- Halve It (Training)
+
+  /** Ziele der Reihe nach. Wer in einer Aufnahme das Ziel nie trifft, dessen Punkte werden halbiert. */
+  const HALVE_IT_TARGETS = [
+    { key: '15', label: '15' }, { key: '16', label: '16' }, { key: 'D', label: 'Doppel' },
+    { key: '17', label: '17' }, { key: '18', label: '18' }, { key: 'T', label: 'Triple' },
+    { key: '19', label: '19' }, { key: '20', label: '20' }, { key: 'B', label: 'Bull' }
+  ];
+  const HALVE_IT_START = 40;
+  function halveItHit(key, d) {
+    if (d.s === 0) return false;
+    if (key === 'D') return isDouble(d);
+    if (key === 'T') return isTriple(d);
+    if (key === 'B') return d.s === 25;
+    return d.s === +key;
+  }
+
+  class HalveItEngine {
+    constructor() { this.log = []; this._reset(); }
+    static get targets() { return HALVE_IT_TARGETS; }
+    get isFinished() { return this.rounds.length >= HALVE_IT_TARGETS.length; }
+    get currentTarget() { return HALVE_IT_TARGETS[Math.min(this.rounds.length, HALVE_IT_TARGETS.length - 1)]; }
+    get hitRounds() { return this.rounds.filter((r) => !r.halved).length; }
+    get halvedCount() { return this.rounds.filter((r) => r.halved).length; }
+    get visitPoints() { const k = this.currentTarget.key; return sum(this.visit.filter((d) => halveItHit(k, d))); }
+    throwDart(d) { if (this.isFinished) return; this.log.push(d); this._apply(d); }
+    undo() {
+      if (!this.log.length) return;
+      this.log.pop();
+      const darts = this.log.slice();
+      this._reset();
+      darts.forEach((d) => this._apply(d));
+    }
+    _reset() { this.score = HALVE_IT_START; this.rounds = []; this.visit = []; this.lastMessage = null; }
+    _apply(d) {
+      this.visit.push(d);
+      if (this.visit.length < 3) return;
+      const t = this.currentTarget;
+      const hits = this.visit.filter((x) => halveItHit(t.key, x));
+      const points = sum(hits);
+      const before = this.score;
+      if (hits.length) { this.score += points; this.lastMessage = t.label + ': +' + points; }
+      else { this.score = Math.floor(this.score / 2); this.lastMessage = 'Halbiert: ' + before + ' → ' + this.score; }
+      this.rounds.push({ target: t.key, label: t.label, hits: hits.length, points: points, halved: !hits.length, score: this.score });
+      this.visit = [];
+    }
+  }
+
+  // ---------------------------------------------------------------- JDC Challenge (Training)
+
+  /** Teil 1: Shanghai 10–15, Teil 2: je ein Dart auf D1–D20 und Bull, Teil 3: Shanghai 15–20. */
+  const JDC_STEPS = [];
+  for (let n = 10; n <= 15; n++) JDC_STEPS.push({ part: 1, kind: 'shanghai', n: n });
+  for (let n = 1; n <= 20; n++) JDC_STEPS.push({ part: 2, kind: 'double', n: n });
+  JDC_STEPS.push({ part: 2, kind: 'double', n: 25 });
+  for (let n = 15; n <= 20; n++) JDC_STEPS.push({ part: 3, kind: 'shanghai', n: n });
+  const JDC_PARTS = ['Shanghai 10–15', 'Doppel 1–20 und Bull', 'Shanghai 15–20'];
+  const JDC_GRADES = [[850, 'Schwarz'], [700, 'Rot'], [600, 'Blau'], [450, 'Grün'], [300, 'Gelb'], [150, 'Lila'], [0, 'Weiß']];
+  const jdcGrade = (total) => JDC_GRADES.find((g) => total >= g[0])[1];
+
+  class JdcEngine {
+    constructor() { this.log = []; this._reset(); }
+    static get steps() { return JDC_STEPS; }
+    static get parts() { return JDC_PARTS; }
+    static grade(total) { return jdcGrade(total); }
+    get isFinished() { return this.index >= JDC_STEPS.length; }
+    get step() { return JDC_STEPS[Math.min(this.index, JDC_STEPS.length - 1)]; }
+    get total() { return this.parts[0] + this.parts[1] + this.parts[2]; }
+    get darts() { return this.log.length; }
+    throwDart(d) { if (this.isFinished || this.step.kind !== 'shanghai') return; this.log.push({ d: d }); this._apply(this.log[this.log.length - 1]); }
+    recordDouble(hit) { if (this.isFinished || this.step.kind !== 'double') return; this.log.push({ h: !!hit }); this._apply(this.log[this.log.length - 1]); }
+    undo() {
+      if (!this.log.length) return;
+      this.log.pop();
+      const entries = this.log.slice();
+      this._reset();
+      entries.forEach((x) => this._apply(x));
+    }
+    _reset() { this.index = 0; this.visit = []; this.parts = [0, 0, 0]; this.shanghais = 0; this.doublesHit = 0; this.lastMessage = null; }
+    _apply(x) {
+      const st = this.step;
+      if (st.kind === 'shanghai') {
+        this.visit.push(x.d);
+        if (this.visit.length < 3) return;
+        const hits = this.visit.filter((d) => d.s === st.n);
+        const points = sum(hits);
+        const shanghai = [SINGLE, DOUBLE, TRIPLE].every((m) => hits.some((d) => d.m === m));
+        this.parts[st.part - 1] += points + (shanghai ? 100 : 0);
+        if (shanghai) this.shanghais++;
+        this.lastMessage = shanghai ? 'Shanghai! +' + (points + 100) : st.n + ': +' + points;
+        this.visit = [];
+      } else {
+        const points = x.h ? (st.n === 25 ? 100 : 50) : 0;
+        this.parts[1] += points;
+        if (x.h) this.doublesHit++;
+        this.lastMessage = x.h ? (st.n === 25 ? 'Bull' : 'D' + st.n) + ': +' + points : null;
+      }
+      this.index++;
+      const next = JDC_STEPS[this.index];
+      if (next && next.part !== st.part) this.lastMessage = 'Teil ' + st.part + ' geschafft: ' + this.parts[st.part - 1] + ' Punkte';
+    }
+  }
+
+  // ---------------------------------------------------------------- Cricket (Spiel)
+
+  const CRICKET_TARGETS = [20, 19, 18, 17, 16, 15, 25];
+
+  class CricketEngine {
+    constructor(players) { this.players = players; this.log = []; this._reset(); }
+    static get targets() { return CRICKET_TARGETS; }
+    get current() { return this.states[this.currentIndex]; }
+    get isFinished() { return this.winnerIndex >= 0; }
+    get winnerName() { return this.isFinished ? this.states[this.winnerIndex].player.name : null; }
+    get dartsLeftInVisit() { return 3 - this.visit.length; }
+    /** Ist die Zahl bei allen zu? Dann bringt sie niemandem mehr Punkte. */
+    isDead(n) { return this.states.every((s) => s.marks[n] >= 3); }
+    throwDart(d) { if (this.isFinished) return; this.log.push(d); this._apply(d); }
+    undo() {
+      if (!this.log.length) return;
+      this.log.pop();
+      const darts = this.log.slice();
+      this._reset();
+      darts.forEach((d) => this._apply(d));
+    }
+    _reset() {
+      this.states = this.players.map((p) => {
+        const marks = {};
+        CRICKET_TARGETS.forEach((n) => { marks[n] = 0; });
+        return { player: p, marks: marks, points: 0, totalMarks: 0, darts: 0 };
+      });
+      this.currentIndex = 0; this.visit = []; this.winnerIndex = -1; this.lastMessage = null;
+    }
+    _apply(d) {
+      const st = this.current;
+      st.darts++;
+      this.visit.push(d);
+      this.lastMessage = null;
+      if (CRICKET_TARGETS.indexOf(d.s) >= 0) {
+        const n = d.s;
+        const m = n === 25 ? (d.m === DOUBLE ? 2 : 1) : d.m;
+        const use = Math.min(m, 3 - st.marks[n]);
+        st.marks[n] += use;
+        st.totalMarks += m;
+        const extra = m - use;
+        if (extra > 0 && this.states.some((o) => o !== st && o.marks[n] < 3)) {
+          const pts = extra * (n === 25 ? 25 : n);
+          st.points += pts;
+          this.lastMessage = '+' + pts + ' Punkte';
+        } else if (use > 0 && st.marks[n] === 3) {
+          this.lastMessage = (n === 25 ? 'Bull' : n) + ' ist zu';
+        }
+      }
+      const closedAll = CRICKET_TARGETS.every((n) => st.marks[n] >= 3);
+      if (closedAll && this.states.every((o) => o === st || o.points <= st.points)) {
+        this.winnerIndex = this.currentIndex;
+        this.lastMessage = st.player.name + ' gewinnt!';
+        return;
+      }
+      if (this.visit.length === 3) { this.visit = []; this.currentIndex = (this.currentIndex + 1) % this.states.length; }
+    }
+    stats() {
+      return this.states.map((s, i) => ({
+        id: s.player.id, name: s.player.name, colorIndex: s.player.colorIndex, won: i === this.winnerIndex,
+        points: s.points, marks: s.totalMarks, darts: s.darts
+      }));
+    }
+  }
+  const cricketMpr = (s) => s.darts > 0 ? s.marks / s.darts * 3 : 0;
+
+  // ---------------------------------------------------------------- Killer (Partyspiel)
+
+  /** Zufällige, verschiedene Zahlen 1–20, eine pro Spieler. */
+  function killerNumbers(count) {
+    const pool = [];
+    for (let i = 1; i <= 20; i++) pool.push(i);
+    for (let i = pool.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); const t = pool[i]; pool[i] = pool[j]; pool[j] = t; }
+    return pool.slice(0, count);
+  }
+
+  class KillerEngine {
+    /** settings: { lives, numbers: [Zahl je Spieler] } */
+    constructor(settings, players) {
+      this.settings = { lives: settings.lives || 3, numbers: (settings.numbers && settings.numbers.length === players.length) ? settings.numbers : killerNumbers(players.length) };
+      this.players = players; this.log = []; this._reset();
+    }
+    get current() { return this.states[this.currentIndex]; }
+    get alive() { return this.states.filter((s) => s.lives > 0); }
+    get isFinished() { return this.winnerIndex >= 0; }
+    get winnerName() { return this.isFinished ? this.states[this.winnerIndex].player.name : null; }
+    throwDart(d) { if (this.isFinished) return; this.log.push(d); this._apply(d); }
+    undo() {
+      if (!this.log.length) return;
+      this.log.pop();
+      const darts = this.log.slice();
+      this._reset();
+      darts.forEach((d) => this._apply(d));
+    }
+    _reset() {
+      this.states = this.players.map((p, i) => ({ player: p, number: this.settings.numbers[i], lives: this.settings.lives, isKiller: false, kills: 0, darts: 0, out: 0 }));
+      this.currentIndex = 0; this.visit = []; this.winnerIndex = -1; this.lastMessage = null; this.outCount = 0;
+    }
+    _apply(d) {
+      const st = this.current;
+      st.darts++;
+      this.visit.push(d);
+      this.lastMessage = null;
+      if (isDouble(d) && d.s !== 25) {
+        const target = this.states.find((o) => o.number === d.s && o.lives > 0);
+        if (target === st) {
+          if (!st.isKiller) { st.isKiller = true; this.lastMessage = st.player.name + ' ist jetzt Killer!'; }
+          else { this._hit(st, st); this.lastMessage = 'Eigenes Doppel! ' + st.player.name + ' verliert ein Leben'; }
+        } else if (target && st.isKiller) {
+          this._hit(st, target);
+          this.lastMessage = target.lives > 0 ? target.player.name + ' verliert ein Leben' : target.player.name + ' ist raus!';
+        }
+      }
+      const alive = this.alive;
+      if (alive.length <= 1 && this.states.length > 1) {
+        this.winnerIndex = this.states.indexOf(alive.length ? alive[0] : st);
+        this.lastMessage = this.states[this.winnerIndex].player.name + ' gewinnt!';
+        return;
+      }
+      if (this.visit.length === 3 || st.lives <= 0) this._next();
+    }
+    _hit(by, target) {
+      target.lives = Math.max(0, target.lives - 1);
+      if (by !== target) by.kills++;
+      if (target.lives === 0) target.out = ++this.outCount;
+    }
+    _next() {
+      this.visit = [];
+      for (let k = 1; k <= this.states.length; k++) {
+        const i = (this.currentIndex + k) % this.states.length;
+        if (this.states[i].lives > 0) { this.currentIndex = i; return; }
+      }
+    }
+    stats() {
+      // Platz: Sieger 1, danach wer zuletzt rausflog
+      const n = this.states.length;
+      return this.states.map((s, i) => ({
+        id: s.player.id, name: s.player.name, colorIndex: s.player.colorIndex, won: i === this.winnerIndex,
+        number: s.number, lives: s.lives, kills: s.kills, darts: s.darts,
+        place: i === this.winnerIndex ? 1 : (s.out ? n - s.out + 1 : 2)
+      }));
+    }
+  }
+
   global.Darts = {
     SINGLE, DOUBLE, TRIPLE, MISS, dart, score, isDouble, isTriple, label, sum, MODES, MODE_NAMES, rules, qualifies,
     Checkout, settingsTitle, X01Engine, stateAverage, visitScored,
     emptyStats, statsAverage, statsFirst9, lifetimeStats,
     CheckoutTrainingEngine, AroundTheClockEngine, BobsEngine, ClockVariants, clockLabel,
-    TrainingModes, trainingResultText, mergePayload, mergeSummary, Sample
+    TrainingModes, trainingResultText, mergePayload, mergeSummary, Sample,
+    HalveItEngine, JdcEngine, CricketEngine, KillerEngine, cricketMpr, killerNumbers
   };
   if (typeof module !== 'undefined') module.exports = global.Darts;
 })(typeof window !== 'undefined' ? window : globalThis);
