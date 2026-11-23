@@ -235,6 +235,7 @@
     half: '<circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 1 0 18Z" fill="currentColor"/>',
     medal: '<circle cx="12" cy="15" r="5.5"/><path d="M8.5 3h7l-2 7.2M8.5 3l2 7.2"/><path d="m12 12.6.9 1.6 1.8.3-1.3 1.2.3 1.8-1.7-.9-1.7.9.3-1.8-1.3-1.2 1.8-.3Z" fill="currentColor" stroke="none"/>',
     heart: '<path d="M12 20s-7.5-4.6-7.5-10A4.3 4.3 0 0 1 12 7.4 4.3 4.3 0 0 1 19.5 10c0 5.4-7.5 10-7.5 10Z" fill="currentColor"/>',
+    dart: '<path d="M21 3l-5.5 1.8 3.7 3.7Z" fill="currentColor"/><path d="M17.3 6.7 6.5 17.5"/><path d="M6.5 17.5H3l2-2M6.5 17.5V21l2-2"/>',
     octagon: '<path d="M8 3h8l5 5v8l-5 5H8l-5-5V8l5-5Z"/><path d="m9 9 6 6M15 9l-6 6"/>'
   };
   const icon = (n, cls) => '<svg class="i' + (cls ? ' ' + cls : '') + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + P[n] + '</svg>';
@@ -786,6 +787,13 @@
 
   // ---- Rund um die Uhr
 
+  /** Drei Pfeile für die aktuelle Aufnahme: grün = Treffer, rot = daneben, grau = noch offen. */
+  function visitArrows(results) {
+    let h = '<span class="arrows" aria-label="Aufnahme: ' + results.length + ' von 3 Darts geworfen">';
+    for (let i = 0; i < 3; i++) h += '<span class="arrow' + (i < results.length ? (results[i] ? ' hit' : ' miss') : '') + '">' + icon('dart') + '</span>';
+    return h + '</span>';
+  }
+
   function viewClock(r) {
     const e = r.engine;
     const variant = prefs.clockVariant;
@@ -804,7 +812,7 @@
     }
     const pct = e.hits / D.AroundTheClockEngine.targets.length * 100;
     const inner = '<div class="train"><div class="progress"><span style="width:' + pct + '%"></span></div>' +
-      '<div class="meta-row"><span>' + e.darts + ' Darts</span><span>Dart ' + (e.darts % 3 + 1) + ' der Aufnahme</span></div>' +
+      '<div class="meta-row"><span>' + e.darts + ' Darts</span>' + visitArrows(e.log.slice(e.darts - e.darts % 3)) + '</div>' +
       '<div class="grow"><div class="big-label">Ziel</div><div class="big-target">' + esc(D.clockLabel(variant, e.currentTarget)) + '</div></div>' +
       '<div class="two"><button class="key big k-triple" data-a="clockHit" data-v="0">' + icon('x') + 'Daneben</button><button class="key big k-double filled" data-a="clockHit" data-v="1">' + icon('check') + 'Treffer</button></div>' +
       '<div class="center"><button class="link-btn" data-a="trainUndo"' + (e.log.length ? '' : ' disabled') + '>' + icon('undo') + ' Rückgängig</button></div></div>';
