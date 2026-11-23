@@ -306,9 +306,18 @@ select.plain {
 .stage-col { display: flex; flex-direction: column; gap: 10px; min-height: 0; min-width: 0; }
 .stage-col.info { flex: 1; }
 .stage-col.pad { margin-top: auto; }
-@media (min-width: 820px) and (min-height: 560px) {
-  .stage-body { flex-direction: row; gap: 24px; align-items: flex-start; padding-top: 8px; }
-  .stage-col.pad { width: 480px; flex: none; margin-top: 0; }
+/* Sehr flache Bildschirme (Handy quer): nichts überlappen lassen, notfalls scrollen. */
+@media (max-height: 520px) {
+  .stage { overflow-y: auto; }
+  .stage-body, .stage-col { flex-shrink: 0; }
+  .stage-col.info { flex: none; }
+  .key { min-height: 34px !important; font-size: 16px; }
+  .key.mod { min-height: 30px !important; }
+}
+/* Tastenfeld immer unten, auch auf breiten Bildschirmen; dort mittig und nicht zu breit. */
+@media (min-width: 820px) {
+  .stage-body { width: 100%; max-width: 1100px; margin: 0 auto; padding-top: 8px; }
+  .stage-col.pad { width: 100%; max-width: 760px; margin-left: auto; margin-right: auto; }
 }
 
 .scoreboard {
